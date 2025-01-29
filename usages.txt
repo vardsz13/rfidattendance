@@ -1,0 +1,36 @@
+For a regular page:
+
+<?php
+require_once '../includes/functions.php';
+require_once '../includes/header.php';
+
+// Your page content here
+
+require_once '../includes/footer.php';
+
+-----------------------------------------
+For pages needing special features, set variables before header:
+
+phpCopy<?php
+$useDataTables = true; // For tables
+$useCalendar = true;   // For calendar
+$useCharts = true;     // For charts
+require_once '../includes/header.php';
+
+-----------------------------------------
+For protected pages:
+
+phpCopy<?php
+require_once '../includes/functions.php';
+requireLogin(); // or requireAdmin() for admin pages
+require_once '../includes/header.php';
+
+--------------------------------------------
+
+The auth system now provides:
+
+Basic login/logout functionality
+Session management
+Role-based access (admin/user)
+Simple authentication status check
+Flash messages for user feedback

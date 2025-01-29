@@ -1,0 +1,64 @@
+rfid_attendance/
+├── config/
+│   ├── database.php           # Database connection and functions
+│   └── constants.php          # Global constants
+│
+├── includes/
+│   ├── links.php             # CDN and internal links
+│   ├── functions.php         # General shared functions
+│   ├── auth_functions.php    # Authentication functions
+│   ├── header.php            # Common header template
+│   ├── footer.php            # Common footer template
+│   └── nav.php               # Navigation menu
+│
+├── assets/
+│   ├── css/
+│   │   ├── style.css         # Main stylesheet
+│   │   └── auth.css          # Authentication styles
+│   ├── js/
+│   │   ├── calendar.js       # FullCalendar initialization
+│   │   ├── attendance.js     # Attendance table handlers
+│   │   ├── chart.js          # Chart.js implementations
+│   │   └── dashboard.js      # Dashboard functionality
+│   └── img/                  # Image assets
+│
+├── admin/
+│   ├── index.php             # Admin dashboard
+│   ├── users/
+│   │   ├── index.php         # Users list
+│   │   ├── add.php           # Add user
+│   │   ├── edit.php          # Edit user
+│   │   └── delete.php        # Delete user
+│   ├── attendance/
+│   │   ├── index.php         # All attendance records
+│   │   ├── daily.php         # Daily records
+│   │   ├── monthly.php       # Monthly summary
+│   │   └── export.php        # Export to Excel/CSV
+│   └── devices/
+│       ├── index.php         # Device management
+│       ├── logs.php          # Device logs
+│       └── registration.php   # RFID/Fingerprint registration
+│
+├── user/
+│   ├── index.php             # User dashboard
+│   ├── attendance/
+│   │   ├── view.php          # View attendance
+│   │   └── calendar.php      # Calendar view
+│   └── profile/
+│       ├── view.php          # View profile
+│       └── edit.php          # Edit profile
+│
+├── auth/
+│   ├── login.php             # Login page
+│   ├── logout.php            # Logout handler
+│   └── auth_check.php        # Authentication verification
+│
+├── ajax/
+│   ├── attendance.php        # Attendance AJAX handlers
+│   ├── users.php            # User management AJAX
+│   └── devices.php          # Device AJAX handlers
+│
+├── database.sql              # Complete database schema
+├── .htaccess                 # Apache configuration
+├── index.php                 # Main entry (redirects to login)
+└── README.md                 # Project documentation
