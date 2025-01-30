@@ -49,9 +49,14 @@ try {
                     exit;
                 }
             }
-            
-            // Only check for future dates if the date is after today
-            if ($date > $today) {
+
+            // Convert dates to timestamps for comparison
+            $dateTimestamp = strtotime($date);
+            $todayTimestamp = strtotime($today);
+            $tomorrowTimestamp = strtotime('tomorrow');
+
+            // Only check for future dates if the date is tomorrow or later
+            if ($dateTimestamp >= $tomorrowTimestamp) {
                 echo json_encode([
                     'holiday' => null,
                     'attendance' => null,
@@ -80,7 +85,9 @@ try {
                 COUNT(DISTINCT CASE WHEN TIME(log_time) > '09:00:00' AND log_type = 'in' THEN user_id END) as late,
                 COUNT(DISTINCT CASE WHEN remarks = 'excused' THEN user_id END) as excused,
                 COUNT(DISTINCT CASE WHEN remarks = 'half_day' THEN user_id END) as half_day,
-                COUNT(DISTINCT CASE WHEN remarks = 'vacation' THEN user_id END) as vacation
+                COUNT(DISTINCT CASE WHEN remarks = 'vacation' THEN user_id END) as vacation,
+                COUNT(DISTINCT CASE WHEN remarks = 'official_business' THEN user_id END) as official_business,
+                COUNT(DISTINCT CASE WHEN remarks = 'work_from_home' THEN user_id END) as work_from_home
              FROM attendance_logs 
              WHERE DATE(log_time) = ?";
 
@@ -100,7 +107,9 @@ try {
                     'late' => 0,
                     'excused' => 0,
                     'half_day' => 0,
-                    'vacation' => 0
+                    'vacation' => 0,
+                    'official_business' => 0,
+                    'work_from_home' => 0
                 ];
             }
             
@@ -108,7 +117,9 @@ try {
             $nonAbsent = ($summary['total_present'] ?? 0) + 
                         ($summary['excused'] ?? 0) + 
                         ($summary['vacation'] ?? 0) + 
-                        ($summary['half_day'] ?? 0);
+                        ($summary['half_day'] ?? 0) +
+                        ($summary['official_business'] ?? 0) +
+                        ($summary['work_from_home'] ?? 0);
             
             $absent = $totalUsers - $nonAbsent;
             
@@ -121,6 +132,8 @@ try {
                     'excused' => (int)($summary['excused'] ?? 0),
                     'half_day' => (int)($summary['half_day'] ?? 0),
                     'vacation' => (int)($summary['vacation'] ?? 0),
+                    'official_business' => (int)($summary['official_business'] ?? 0),
+                    'work_from_home' => (int)($summary['work_from_home'] ?? 0),
                     'absent' => $absent,
                     'total_users' => $totalUsers,
                     'isToday' => $date === $today
@@ -128,6 +141,98 @@ try {
             ];
             
             echo json_encode($response);
+            break;
+
+        case 'update_attendance':
+            // Ensure admin access
+            if (!$isAdmin) {
+                throw new Exception('Unauthorized access');
+            }
+
+            $userId = $_POST['user_id'] ?? null;
+            $date = $_POST['date'] ?? null;
+            $remark = $_POST['remark'] ?? null;
+            $logType = $_POST['log_type'] ?? null;
+
+            if (!$userId || !$date || !$remark || !$logType) {
+                throw new Exception('Missing required parameters');
+            }
+
+            // Update or insert attendance record
+            $attendanceData = [
+                'user_id' => $userId,
+                'log_time' => $date,
+                'log_type' => $logType,
+                'remarks' => $remark
+            ];
+
+            $existingRecord = $db->single(
+                "SELECT id FROM attendance_logs 
+                 WHERE user_id = ? AND DATE(log_time) = ? AND log_type = ?",
+                [$userId, $date, $logType]
+            );
+
+            if ($existingRecord) {
+                $db->update('attendance_logs', 
+                    ['remarks' => $remark], 
+                    ['id' => $existingRecord['id']]
+                );
+            } else {
+                $db->insert('attendance_logs', $attendanceData);
+            }
+
+            echo json_encode(['success' => true]);
+            break;
+
+        case 'bulk_update':
+            // Ensure admin access
+            if (!$isAdmin) {
+                throw new Exception('Unauthorized access');
+            }
+
+            $date = $_POST['date'] ?? null;
+            $userIds = $_POST['user_ids'] ?? [];
+            $remark = $_POST['remark'] ?? null;
+            $logType = $_POST['log_type'] ?? null;
+
+            if (!$date || empty($userIds) || !$remark || !$logType) {
+                throw new Exception('Missing required parameters');
+            }
+
+            $db->connect()->beginTransaction();
+
+            try {
+                foreach ($userIds as $userId) {
+                    $attendanceData = [
+                        'user_id' => $userId,
+                        'log_time' => $date,
+                        'log_type' => $logType,
+                        'remarks' => $remark
+                    ];
+
+                    $existingRecord = $db->single(
+                        "SELECT id FROM attendance_logs 
+                         WHERE user_id = ? AND DATE(log_time) = ? AND log_type = ?",
+                        [$userId, $date, $logType]
+                    );
+
+                    if ($existingRecord) {
+                        $db->update('attendance_logs', 
+                            ['remarks' => $remark], 
+                            ['id' => $existingRecord['id']]
+                        );
+                    } else {
+                        $db->insert('attendance_logs', $attendanceData);
+                    }
+                }
+
+                $db->connect()->commit();
+                echo json_encode(['success' => true]);
+
+            } catch (Exception $e) {
+                $db->connect()->rollBack();
+                throw new Exception('Failed to update attendance records: ' . $e->getMessage());
+            }
             break;
 
         default:
