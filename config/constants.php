@@ -1,5 +1,5 @@
-<!-- config/constants.php -->
 <?php
+// config/constants.php
 // Site Information
 define('SITE_NAME', 'RFID Attendance System');
 define('SITE_VERSION', '1.0.0');

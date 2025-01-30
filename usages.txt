@@ -34,3 +34,27 @@ Session management
 Role-based access (admin/user)
 Simple authentication status check
 Flash messages for user feedback
+
+
+---------------------------------------------
+calendar component usage:
+
+<?php
+// At the top of your page
+require_once 'includes/components/Calendar.php';
+
+// In your page content
+$year = $_GET['year'] ?? date('Y');
+$month = $_GET['month'] ?? date('m');
+$isAdmin = isset($_SESSION['role']) && $_SESSION['role'] === 'admin';
+$userId = $isAdmin ? null : ($_SESSION['user_id'] ?? null);
+
+$calendar = new Calendar($db, $year, $month, $isAdmin, $userId);
+
+// Show stats cards if admin
+echo $calendar->getStatsCards();
+
+// Show calendar
+echo $calendar->render();
+?>
+

@@ -1,4 +1,3 @@
-<!-- includes/nav.php -->
 <nav class="bg-white shadow-lg">
     <div class="max-w-6xl mx-auto px-4">
         <div class="flex justify-between">
@@ -10,8 +9,9 @@
                 </a>
             </div>
             
-            <?php if (isLoggedIn()): ?>
-                <div class="flex items-center space-x-3">
+            <!-- Navigation Menu -->
+            <div class="flex items-center space-x-3">
+                <?php if (function_exists('isLoggedIn') && isLoggedIn()): ?>
                     <?php if (isAdmin()): ?>
                         <a href="<?= ADMIN_URL ?>" class="py-2 px-2 font-medium text-gray-500 hover:text-gray-900">
                             Dashboard
@@ -37,14 +37,20 @@
                         </a>
                     <?php endif; ?>
                     <div class="border-l pl-3 ml-3">
-                        <span class="text-gray-500 mr-2"><?= $_SESSION['name'] ?></span>
+                        <span class="text-gray-500 mr-2"><?= $_SESSION['name'] ?? '' ?></span>
                         <a href="<?= AUTH_URL ?>/logout.php" class="py-2 px-2 font-medium text-red-500 hover:text-red-900">
                             Logout
                             <i class="fas fa-sign-out-alt"></i>
                         </a>
                     </div>
-                </div>
-            <?php endif; ?>
+                <?php else: ?>
+                    <!-- Public navigation items -->
+                    <a href="<?= AUTH_URL ?>/login.php" class="py-2 px-4 font-medium text-blue-500 hover:text-blue-700 border border-blue-500 rounded">
+                        Login
+                        <i class="fas fa-sign-in-alt"></i>
+                    </a>
+                <?php endif; ?>
+            </div>
         </div>
     </div>
 </nav>

@@ -3,6 +3,7 @@ require_once dirname(__DIR__) . '/config/constants.php';
 require_once dirname(__DIR__) . '/includes/auth_functions.php';
 require_once dirname(__DIR__) . '/includes/functions.php';
 
+
 // Start session at the very beginning
 session_start();
 

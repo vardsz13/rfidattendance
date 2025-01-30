@@ -1,7 +1,7 @@
-<!--includes/auth_functions.php
+
 <?php
 require_once 'functions.php';
-
+//<!--includes/auth_functions.php
 function loginUser($username, $password) {
     $db = getDatabase();
     

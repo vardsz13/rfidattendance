@@ -1,5 +1,5 @@
-<!-- includes/functions.php -->
 <?php
+//includes/function.php
 require_once dirname(__DIR__) . '/config/constants.php';
 require_once dirname(__DIR__) . '/config/database.php';
 
