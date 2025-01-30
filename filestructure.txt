@@ -61,6 +61,10 @@ rfid_attendance/
 │   ├── users.php            # User management AJAX
 │   └── devices.php          # Device AJAX handlers
 │
+├── api/
+│   ├── devices.php    
+│   └── verification.php    
+│  
 ├── database.sql              # Complete database schema
 ├── .htaccess                 # Apache configuration
 ├── index.php                 # Main entry (redirects to login)
