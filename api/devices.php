@@ -19,12 +19,18 @@ if (!$data) {
 }
 
 // Required fields
-$required_fields = ['rfid_uid'];
+$required_fields = ['rfid_uid', 'log_type'];
 foreach ($required_fields as $field) {
     if (!isset($data[$field])) {
         http_response_code(400);
         exit(json_encode(['error' => "Missing required field: $field"]));
     }
+}
+
+// Validate log_type
+if (!in_array($data['log_type'], ['in', 'out'])) {
+    http_response_code(400);
+    exit(json_encode(['error' => 'Invalid log type']));
 }
 
 try {
@@ -114,9 +120,8 @@ try {
         $message = 'Goodbye!';
     }
 
-    // Create device log
+    // Create device log (removed verification_type)
     $deviceLogData = [
-        'verification_type' => $data['verification_type'],
         'rfid_uid' => $data['rfid_uid'],
         'lcd_message' => $assignment['name'] . ' - ' . $message,
         'buzzer_tone' => 'SUCCESS_TONE',
