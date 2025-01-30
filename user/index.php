@@ -77,12 +77,12 @@ require_once dirname(__DIR__) . '/includes/header.php';
     <div class="bg-white rounded-lg shadow p-6">
         <div class="flex items-center justify-between">
             <div>
-                <h2 class="text-2xl font-bold text-gray-800"><?= htmlspecialchars($userData['name']) ?></h2>
-                <p class="text-gray-600">Employee ID: <?= htmlspecialchars($userData['username']) ?></p>
+            <h2 class="text-2xl font-bold text-gray-800"><?= htmlspecialchars($userData['name'] ?? '') ?></h2>
+            <p class="text-gray-600">Employee ID: <?= htmlspecialchars($userData['username'] ?? '') ?></p>
             </div>
             <div class="text-right">
                 <div class="font-semibold">
-                    <?php if ($userData['current_status'] === 'in'): ?>
+                <?php if ($userData && $userData['current_status'] === 'in'): ?>
                         <span class="text-green-600">✓ Currently Checked In</span>
                         <div class="text-sm text-gray-600">
                             Since: <?= date('h:i A', strtotime($userData['time_in'])) ?>
@@ -91,7 +91,7 @@ require_once dirname(__DIR__) . '/includes/header.php';
                                 <?= ucfirst($userData['time_in_status']) ?>
                             </span>
                         </div>
-                    <?php elseif ($userData['current_status'] === 'out'): ?>
+                        <?php elseif ($userData && $userData['current_status'] === 'out'): ?>
                         <span class="text-blue-600">✓ Checked Out</span>
                         <div class="text-sm text-gray-600">Have a great day!</div>
                     <?php else: ?>
