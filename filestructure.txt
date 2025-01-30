@@ -6,7 +6,7 @@ rfid_attendance/
 ├── includes/
 │   ├── components/
 │   │   ├── Calendar.php
-│   │   ├── calendar.js
+│   │   └── calendar.js
 │   ├── links.php             # CDN and internal links
 │   ├── functions.php         # General shared functions
 │   ├── auth_functions.php    # Authentication functions
@@ -62,8 +62,8 @@ rfid_attendance/
 │   └── devices.php          # Device AJAX handlers
 │
 ├── api/
-│   ├── devices.php    
-│   └── verification.php    
+│   ├── verification.php     # Handles RFID + fingerprint verification requests
+│   └── devices.php         # Handles device communication (ESP8266)  
 │  
 ├── database.sql              # Complete database schema
 ├── .htaccess                 # Apache configuration
