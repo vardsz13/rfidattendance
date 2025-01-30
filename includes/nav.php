@@ -25,6 +25,12 @@
                         <a href="<?= ADMIN_URL ?>/devices" class="py-2 px-2 font-medium text-gray-500 hover:text-gray-900">
                             Devices
                         </a>
+                        <a href="<?= ADMIN_URL ?>/holidays" class="py-2 px-2 font-medium text-gray-500 hover:text-gray-900">
+                            Holidays
+                        </a>
+                        <a href="<?= ADMIN_URL ?>/settings" class="py-2 px-2 font-medium text-gray-500 hover:text-gray-900">
+                            Settings
+                        </a>
                     <?php else: ?>
                         <a href="<?= USER_URL ?>" class="py-2 px-2 font-medium text-gray-500 hover:text-gray-900">
                             Dashboard
