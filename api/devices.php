@@ -120,10 +120,9 @@ try {
         $message = 'Goodbye!';
     }
 
-    // Create device log (removed verification_type)
+    // Create device log (removed lcd_message)
     $deviceLogData = [
         'rfid_uid' => $data['rfid_uid'],
-        'lcd_message' => $assignment['name'] . ' - ' . $message,
         'buzzer_tone' => 'SUCCESS_TONE',
         'status' => 'success'
     ];
@@ -139,7 +138,6 @@ try {
         'status' => 'success',
         'message' => 'Attendance recorded successfully',
         'user_name' => $assignment['name'],
-        'lcd_message' => $assignment['name'] . ' - ' . $message,
         'buzzer_tone' => 'SUCCESS_TONE',
         'log_type' => $data['log_type']
     ]);
@@ -156,7 +154,6 @@ try {
     echo json_encode([
         'status' => 'error',
         'message' => $errorMessage,
-        'lcd_message' => 'Error: ' . $errorMessage,
         'buzzer_tone' => 'ERROR_TONE'
     ]);
 }
