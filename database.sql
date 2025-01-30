@@ -1,8 +1,21 @@
 -- Create the database
 CREATE DATABASE IF NOT EXISTS rfidattendance;
 USE rfidattendance;
+-- Settings table for system configuration
+CREATE TABLE system_settings (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    setting_key VARCHAR(50) UNIQUE NOT NULL,
+    setting_value VARCHAR(255) NOT NULL,
+    setting_description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
 
--- Users table remains the same
+-- Insert default settings
+INSERT INTO system_settings (setting_key, setting_value, setting_description) VALUES
+('late_time', '09:00:00', 'Time after which attendance is marked as late (24-hour format)');
+
+-- Users table remains the same from original schema
 CREATE TABLE users (
     id INT PRIMARY KEY AUTO_INCREMENT,
     username VARCHAR(50) UNIQUE NOT NULL,
@@ -12,49 +25,60 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Verification data remains the same
+-- Verification data for RFID/Fingerprint
 CREATE TABLE verification_data (
     id INT PRIMARY KEY AUTO_INCREMENT,
     user_id INT NOT NULL,
     rfid_uid VARCHAR(50) UNIQUE NOT NULL,
-    fingerprint_id INT UNIQUE NOT NULL,
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
--- Device logs remains the same
+-- Device logs for all verification attempts
 CREATE TABLE device_logs (
     id INT PRIMARY KEY AUTO_INCREMENT,
     verification_type ENUM('rfid', 'fingerprint') NOT NULL,
     rfid_uid VARCHAR(50) NULL,
-    fingerprint_id INT NULL,
     verification_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     lcd_message VARCHAR(100) NOT NULL,
     buzzer_tone VARCHAR(20) NOT NULL,
     status ENUM('pending', 'success', 'failed') NOT NULL,
     INDEX idx_verification_time (verification_time),
-    INDEX idx_rfid (rfid_uid),
-    INDEX idx_fingerprint (fingerprint_id)
+    INDEX idx_rfid (rfid_uid)
 );
 
--- Modified attendance table for multiple in/out
+-- Simplified attendance logs (IN only)
 CREATE TABLE attendance_logs (
     id INT PRIMARY KEY AUTO_INCREMENT,
     user_id INT NOT NULL,
-    log_type ENUM('in', 'out') NOT NULL,
-    log_time TIMESTAMP NOT NULL,
+    time_in TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    attendance_date DATE GENERATED ALWAYS AS (DATE(time_in)) STORED,
+    status ENUM('on_time', 'late') NOT NULL,
     rfid_log_id INT NOT NULL,
-    fingerprint_log_id INT NOT NULL,
-    attendance_date DATE GENERATED ALWAYS AS (DATE(log_time)) STORED,
-    sequence_number INT NOT NULL,  -- To track multiple in/out pairs
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (rfid_log_id) REFERENCES device_logs(id),
-    FOREIGN KEY (fingerprint_log_id) REFERENCES device_logs(id),
-    INDEX idx_user_date (user_id, attendance_date),
-    INDEX idx_sequence (user_id, attendance_date, sequence_number)
+    UNIQUE KEY unique_daily_attendance (user_id, attendance_date)
 );
 
+-- Daily attendance summary view
+CREATE VIEW daily_attendance_summary AS
+SELECT 
+    u.id as user_id,
+    u.name as user_name,
+    a.attendance_date,
+    TIME(a.time_in) as time_in,
+    a.status as attendance_status,
+    CASE 
+        WHEN a.id IS NULL THEN 'absent'
+        ELSE a.status
+    END as status
+FROM users u
+LEFT JOIN attendance_logs a ON u.id = a.user_id
+WHERE u.role != 'admin'
+GROUP BY u.id, u.name, a.attendance_date;
+
+-- Holidays table
 CREATE TABLE holidays (
     id INT PRIMARY KEY AUTO_INCREMENT,
     holiday_date DATE NOT NULL,
@@ -64,41 +88,6 @@ CREATE TABLE holidays (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY unique_holiday_date (holiday_date)
 );
-
--- Daily attendance summary with all in/out records
-CREATE VIEW daily_attendance_logs AS
-SELECT 
-    a.user_id,
-    u.name as user_name,
-    a.attendance_date,
-    a.sequence_number,
-    MIN(CASE WHEN a.log_type = 'in' THEN TIME(a.log_time) END) as time_in,
-    MIN(CASE WHEN a.log_type = 'out' THEN TIME(a.log_time) END) as time_out,
-    CASE 
-        WHEN MIN(CASE WHEN a.log_type = 'in' THEN TIME(a.log_time) END) <= '09:00:00' THEN 'present'
-        WHEN MIN(CASE WHEN a.log_type = 'in' THEN TIME(a.log_time) END) > '09:00:00' THEN 'late'
-        ELSE 'absent'
-    END as status,
-    TIMEDIFF(
-        MIN(CASE WHEN a.log_type = 'out' THEN a.log_time END),
-        MIN(CASE WHEN a.log_type = 'in' THEN a.log_time END)
-    ) as duration
-FROM attendance_logs a
-JOIN users u ON a.user_id = u.id
-GROUP BY a.user_id, u.name, a.attendance_date, a.sequence_number;
-
--- Daily summary showing first in and last out
-CREATE VIEW daily_attendance_summary AS
-SELECT 
-    user_id,
-    user_name,
-    attendance_date,
-    MIN(time_in) as first_time_in,
-    MAX(time_out) as last_time_out,
-    MIN(status) as attendance_status,
-    SEC_TO_TIME(SUM(TIME_TO_SEC(duration))) as total_hours
-FROM daily_attendance_logs
-GROUP BY user_id, user_name, attendance_date;
 
 INSERT INTO holidays (holiday_date, name, description, is_recurring) VALUES
 ('2025-01-01', 'New Year''s Day', 'New Year''s Day celebration', true),

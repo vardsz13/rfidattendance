@@ -1,101 +1,124 @@
 <?php
+// ajax/devices.php
 require_once '../includes/functions.php';
+require_once '../includes/auth_functions.php';
+
+// Ensure user is logged in and is admin
+requireAdmin();
+
 header('Content-Type: application/json');
 
-// Only accept POST requests from devices
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    exit(json_encode(['error' => 'Method not allowed']));
-}
-
 $db = getDatabase();
-
-// Receive and validate device data
-$data = json_decode(file_get_contents('php://input'), true);
-if (!$data) {
-    http_response_code(400);
-    exit(json_encode(['error' => 'Invalid data format']));
-}
-
-// Required fields for device log
-$required_fields = ['verification_type', 'lcd_display', 'buzzer_sound', 'status'];
-foreach ($required_fields as $field) {
-    if (!isset($data[$field])) {
-        http_response_code(400);
-        exit(json_encode(['error' => "Missing required field: $field"]));
-    }
-}
+$action = $_GET['action'] ?? '';
 
 try {
-    // Begin transaction
-    $db->connect()->beginTransaction();
+    switch ($action) {
+        case 'get_unassigned':
+            // Get unassigned RFID cards
+            $unassigned = $db->all(
+                "SELECT DISTINCT dl.rfid_uid, dl.verification_time 
+                 FROM device_logs dl
+                 LEFT JOIN verification_data vd ON dl.rfid_uid = vd.rfid_uid
+                 WHERE dl.verification_type = 'rfid'
+                 AND dl.rfid_uid IS NOT NULL
+                 AND vd.id IS NULL
+                 ORDER BY dl.verification_time DESC"
+            );
+            echo json_encode(['success' => true, 'data' => $unassigned]);
+            break;
 
-    // Insert device log
-    $log_data = [
-        'verification_type' => $data['verification_type'],
-        'rfid_uid' => $data['rfid_uid'] ?? null,
-        'fingerprint_id' => $data['fingerprint_id'] ?? null,
-        'lcd_display' => $data['lcd_display'],
-        'buzzer_sound' => $data['buzzer_sound'],
-        'status' => $data['status']
-    ];
-    
-    $log_id = $db->insert('device_logs', $log_data);
-    if (!$log_id) {
-        throw new Exception("Failed to insert device log");
-    }
+        case 'assign_rfid':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                throw new Exception('Invalid request method');
+            }
 
-    // If both verifications are successful, create attendance record
-    if ($data['status'] === 'success' && 
-        isset($data['rfid_uid']) && 
-        isset($data['fingerprint_id'])) {
-        
-        // Get user_id from verification_data
-        $user = $db->single(
-            "SELECT user_id FROM verification_data 
-             WHERE rfid_uid = ? AND fingerprint_id = ? AND is_active = 1",
-            [$data['rfid_uid'], $data['fingerprint_id']]
-        );
+            $userId = $_POST['user_id'] ?? '';
+            $rfidUid = $_POST['rfid_uid'] ?? '';
 
-        if ($user) {
-            // Check if attendance already exists for today
+            if (empty($userId) || empty($rfidUid)) {
+                throw new Exception('Missing required fields');
+            }
+
+            // Begin transaction
+            $db->connect()->beginTransaction();
+
+            // Check if RFID is already assigned
             $existing = $db->single(
-                "SELECT id FROM attendance 
-                 WHERE user_id = ? AND DATE(attendance_date) = CURRENT_DATE",
-                [$user['user_id']]
+                "SELECT id FROM verification_data WHERE rfid_uid = ? AND is_active = 1",
+                [$rfidUid]
             );
 
-            if (!$existing) {
-                // Create new attendance record
-                $attendance_data = [
-                    'user_id' => $user['user_id'],
-                    'rfid_log_id' => $log_id,
-                    'fingerprint_log_id' => $log_id,
-                    'attendance_date' => date('Y-m-d'),
-                    'time_in' => date('Y-m-d H:i:s')
-                ];
-                
-                if (!$db->insert('attendance', $attendance_data)) {
-                    throw new Exception("Failed to create attendance record");
-                }
+            if ($existing) {
+                throw new Exception('RFID already assigned');
             }
-        }
+
+            // Deactivate any existing RFID for this user
+            $db->update(
+                'verification_data',
+                ['is_active' => 0],
+                ['user_id' => $userId, 'is_active' => 1]
+            );
+
+            // Create new verification data
+            $verificationData = [
+                'user_id' => $userId,
+                'rfid_uid' => $rfidUid,
+                'is_active' => 1
+            ];
+
+            if (!$db->insert('verification_data', $verificationData)) {
+                throw new Exception('Failed to assign RFID');
+            }
+
+            // Update device logs status
+            $db->update(
+                'device_logs',
+                [
+                    'status' => 'success',
+                    'lcd_message' => 'RFID Registered',
+                    'buzzer_tone' => 'SUCCESS_TONE'
+                ],
+                ['rfid_uid' => $rfidUid, 'status' => 'pending']
+            );
+
+            $db->connect()->commit();
+            echo json_encode(['success' => true]);
+            break;
+
+        case 'deactivate_rfid':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                throw new Exception('Invalid request method');
+            }
+
+            $verificationId = $_POST['verification_id'] ?? '';
+            if (empty($verificationId)) {
+                throw new Exception('Missing verification ID');
+            }
+
+            if (!$db->update('verification_data', 
+                ['is_active' => 0], 
+                ['id' => $verificationId])
+            ) {
+                throw new Exception('Failed to deactivate RFID');
+            }
+
+            echo json_encode(['success' => true]);
+            break;
+
+        default:
+            throw new Exception('Invalid action');
     }
-
-    $db->connect()->commit();
-    echo json_encode(['success' => true, 'log_id' => $log_id]);
-
 } catch (Exception $e) {
-    $db->connect()->rollBack();
-    error_log("Device data processing error: " . $e->getMessage());
-    http_response_code(500);
-    echo json_encode(['error' => 'Internal server error']);
+    http_response_code(400);
+    echo json_encode(['error' => $e->getMessage()]);
 }
 
-/**
- * Double authentication (RFID + Fingerprint)
- * Logs all verification attempts
- * Creates attendance records only when both verifications succeed
- * Handles LCD display messages and buzzer tones
- * Provides proper error handling and transaction management
- */
+// ajax/devices.php
+
+
+// Handles web interface actions
+// Requires admin authentication
+// Manages RFID assignments and deactivations
+// Returns JSON for frontend updates
+// Used by the admin web interface
+
