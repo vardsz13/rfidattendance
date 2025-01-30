@@ -1,8 +1,16 @@
-
 <?php
+require_once dirname(__DIR__) . '/config/constants.php';
 require_once 'functions.php';
-//<!--includes/auth_functions.php
+
+// Start session if not already started
+function ensureSession() {
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+}
+
 function loginUser($username, $password) {
+    ensureSession();
     $db = getDatabase();
     
     try {
@@ -26,6 +34,7 @@ function loginUser($username, $password) {
 }
 
 function logoutUser() {
+    ensureSession();
     $_SESSION = array();
     session_destroy();
     
@@ -35,37 +44,53 @@ function logoutUser() {
 }
 
 function isLoggedIn() {
+    ensureSession();
     return isset($_SESSION['user_id']);
 }
 
 function isAdmin() {
+    ensureSession();
     return isset($_SESSION['role']) && $_SESSION['role'] === 'admin';
 }
 
 function requireLogin() {
+    ensureSession();
+    
     if (!isLoggedIn()) {
+        // Save the requested URL for redirect after login
+        $_SESSION['redirect_after_login'] = $_SERVER['REQUEST_URI'];
+        
+        // Redirect to login
         header('Location: ' . AUTH_URL . '/login.php');
         exit();
     }
 }
 
 function requireAdmin() {
-    // Start session if not started
-    if (session_status() === PHP_SESSION_NONE) {
-        session_start();
-    }
+    ensureSession();
 
     // First check if logged in
     if (!isLoggedIn()) {
-        error_log("requireAdmin: User not logged in");
+        $_SESSION['redirect_after_login'] = $_SERVER['REQUEST_URI'];
         header('Location: ' . AUTH_URL . '/login.php');
         exit();
     }
 
     // Then check if admin
     if (!isAdmin()) {
-        error_log("requireAdmin: User not admin. Role: " . ($_SESSION['role'] ?? 'no role'));
         header('Location: ' . USER_URL);
         exit();
     }
+}
+
+function redirectAfterLogin() {
+    ensureSession();
+    
+    if (isset($_SESSION['redirect_after_login'])) {
+        $redirect = $_SESSION['redirect_after_login'];
+        unset($_SESSION['redirect_after_login']);
+        return $redirect;
+    }
+    
+    return isAdmin() ? ADMIN_URL : USER_URL;
 }

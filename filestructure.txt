@@ -4,6 +4,9 @@ rfid_attendance/
 │   └── constants.php          # Global constants
 │
 ├── includes/
+│   ├── components/
+│   │   ├── Calendar.php
+│   │   ├── calendar.js
 │   ├── links.php             # CDN and internal links
 │   ├── functions.php         # General shared functions
 │   ├── auth_functions.php    # Authentication functions

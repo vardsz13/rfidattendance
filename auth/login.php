@@ -3,9 +3,8 @@ require_once dirname(__DIR__) . '/config/constants.php';
 require_once dirname(__DIR__) . '/includes/auth_functions.php';
 require_once dirname(__DIR__) . '/includes/functions.php';
 
-
-// Start session at the very beginning
-session_start();
+// Start session
+ensureSession();
 
 // Debug
 error_log("Starting login process");
@@ -14,13 +13,8 @@ error_log("SESSION: " . print_r($_SESSION, true));
 // Check if already logged in first
 if (isLoggedIn()) {
     error_log("User already logged in with role: " . $_SESSION['role']);
-    if (isAdmin()) {
-        error_log("Redirecting to admin");
-        header('Location: ' . ADMIN_URL);
-    } else {
-        error_log("Redirecting to user");
-        header('Location: ' . USER_URL);
-    }
+    $redirect = redirectAfterLogin();
+    header('Location: ' . $redirect);
     exit();
 }
 
@@ -36,13 +30,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         if (loginUser($username, $password)) {
             error_log("Login successful - Role: " . $_SESSION['role']);
-            if (isAdmin()) {
-                error_log("Redirecting to admin after login");
-                header('Location: ' . ADMIN_URL);
-            } else {
-                error_log("Redirecting to user after login");
-                header('Location: ' . USER_URL);
-            }
+            $redirect = redirectAfterLogin();
+            header('Location: ' . $redirect);
             exit();
         } else {
             error_log("Login failed");
