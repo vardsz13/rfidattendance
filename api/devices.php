@@ -18,8 +18,8 @@ if (!$data) {
     exit(json_encode(['error' => 'Invalid data format']));
 }
 
-// Required fields for device log
-$required_fields = ['verification_type', 'lcd_message', 'buzzer_tone', 'status'];
+// Required fields
+$required_fields = ['rfid_uid', 'log_type', 'verification_type'];
 foreach ($required_fields as $field) {
     if (!isset($data[$field])) {
         http_response_code(400);
@@ -31,117 +31,127 @@ try {
     // Begin transaction
     $db->connect()->beginTransaction();
     
-    // Insert device log
-    $log_data = [
-        'verification_type' => $data['verification_type'],
-        'rfid_uid' => $data['rfid_uid'] ?? null,
-        'lcd_message' => $data['lcd_message'],
-        'buzzer_tone' => $data['buzzer_tone'],
-        'status' => $data['status']
-    ];
-    
-    $log_id = $db->insert('device_logs', $log_data);
-    if (!$log_id) {
-        throw new Exception("Failed to insert device log");
+    // Get RFID assignment
+    $assignment = $db->single(
+        "SELECT ra.id, ra.user_id, u.name 
+         FROM rfid_assignments ra
+         JOIN rfid_cards rc ON ra.rfid_id = rc.id
+         JOIN users u ON ra.user_id = u.id
+         WHERE rc.rfid_uid = ? AND ra.is_active = true",
+        [$data['rfid_uid']]
+    );
+
+    if (!$assignment) {
+        throw new Exception('Unregistered or inactive RFID card');
     }
 
-    $response = ['success' => false, 'message' => '', 'log_id' => $log_id];
+    // Get late time setting
+    $lateSetting = $db->single(
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'late_time'"
+    );
+    $lateTime = $lateSetting ? $lateSetting['setting_value'] : '09:00:00';
+    
+    $currentTime = date('H:i:s');
+    $currentDate = date('Y-m-d');
 
-    // Handle RFID verification
-    if ($data['verification_type'] === 'rfid' && isset($data['rfid_uid'])) {
-        // Get late time setting
-        $lateSetting = $db->single(
-            "SELECT setting_value FROM system_settings WHERE setting_key = 'late_time'"
-        );
-        $lateTime = $lateSetting ? $lateSetting['setting_value'] : '09:00:00';
-
-        // Check if RFID is registered
-        $verification = $db->single(
-            "SELECT vd.user_id, u.name 
-             FROM verification_data vd
-             JOIN users u ON vd.user_id = u.id
-             WHERE vd.rfid_uid = ? AND vd.is_active = 1",
-            [$data['rfid_uid']]
+    if ($data['log_type'] === 'in') {
+        // Check if already logged in today
+        $existingTimeIn = $db->single(
+            "SELECT id FROM time_in_logs 
+             WHERE assignment_id = ? AND attendance_date = ?",
+            [$assignment['id'], $currentDate]
         );
 
-        if ($verification) {
-            // RFID is registered to a user
-            $currentTime = date('H:i:s');
-            $userId = $verification['user_id'];
-            
-            // Check if attendance already exists for today
-            $existingAttendance = $db->single(
-                "SELECT id FROM attendance_logs 
-                 WHERE user_id = ? AND attendance_date = CURRENT_DATE",
-                [$userId]
-            );
-
-            if (!$existingAttendance) {
-                // Determine if on time or late based on setting
-                $status = (strtotime($currentTime) <= strtotime($lateTime)) ? 'on_time' : 'late';
-                
-                // Create attendance record
-                $attendance_data = [
-                    'user_id' => $userId,
-                    'time_in' => date('Y-m-d H:i:s'),
-                    'rfid_log_id' => $log_id,
-                    'status' => $status
-                ];
-                
-                if ($db->insert('attendance_logs', $attendance_data)) {
-                    // Update device log
-                    $statusMessage = $status === 'on_time' ? 'Welcome!' : 'You are late!';
-                    $db->update('device_logs', [
-                        'status' => 'success',
-                        'lcd_message' => $verification['name'] . ' - ' . $statusMessage,
-                        'buzzer_tone' => $status === 'on_time' ? 'SUCCESS_TONE' : 'ALERT_TONE'
-                    ], ['id' => $log_id]);
-
-                    $response = [
-                        'success' => true,
-                        'message' => 'Attendance recorded',
-                        'user_name' => $verification['name'],
-                        'status' => $status,
-                        'log_id' => $log_id
-                    ];
-                }
-            } else {
-                // Already checked in today
-                $db->update('device_logs', [
-                    'status' => 'failed',
-                    'lcd_message' => 'Already checked in',
-                    'buzzer_tone' => 'ERROR_TONE'
-                ], ['id' => $log_id]);
-
-                $response['message'] = 'Already checked in today';
-            }
-        } else {
-            // Unregistered RFID
-            $db->update('device_logs', [
-                'status' => 'pending',
-                'lcd_message' => 'Unregistered RFID',
-                'buzzer_tone' => 'ERROR_TONE'
-            ], ['id' => $log_id]);
-
-            $response['message'] = 'Unregistered RFID';
+        if ($existingTimeIn) {
+            throw new Exception('Already logged in today');
         }
+
+        // Create time in log
+        $timeInData = [
+            'assignment_id' => $assignment['id'],
+            'time_in' => date('Y-m-d H:i:s'),
+            'status' => strtotime($currentTime) <= strtotime($lateTime) ? 'on_time' : 'late'
+        ];
+
+        if (!$db->insert('time_in_logs', $timeInData)) {
+            throw new Exception('Failed to create time in log');
+        }
+
+        $message = $timeInData['status'] === 'on_time' ? 'Welcome!' : 'You are late!';
+    } else {
+        // For time out, verify there's a time in record for today
+        $timeInRecord = $db->single(
+            "SELECT id FROM time_in_logs 
+             WHERE assignment_id = ? AND attendance_date = ?",
+            [$assignment['id'], $currentDate]
+        );
+
+        if (!$timeInRecord) {
+            throw new Exception('Must log in before logging out');
+        }
+
+        // Check if already logged out
+        $existingTimeOut = $db->single(
+            "SELECT id FROM time_out_logs 
+             WHERE assignment_id = ? AND attendance_date = ?",
+            [$assignment['id'], $currentDate]
+        );
+
+        if ($existingTimeOut) {
+            throw new Exception('Already logged out today');
+        }
+
+        // Create time out log
+        $timeOutData = [
+            'assignment_id' => $assignment['id'],
+            'time_out' => date('Y-m-d H:i:s')
+        ];
+
+        if (!$db->insert('time_out_logs', $timeOutData)) {
+            throw new Exception('Failed to create time out log');
+        }
+
+        $message = 'Goodbye!';
+    }
+
+    // Create device log
+    $deviceLogData = [
+        'verification_type' => $data['verification_type'],
+        'rfid_uid' => $data['rfid_uid'],
+        'lcd_message' => $assignment['name'] . ' - ' . $message,
+        'buzzer_tone' => 'SUCCESS_TONE',
+        'status' => 'success'
+    ];
+    
+    $logId = $db->insert('device_logs', $deviceLogData);
+    if (!$logId) {
+        throw new Exception('Failed to create device log');
     }
 
     $db->connect()->commit();
-    echo json_encode($response);
+
+    echo json_encode([
+        'status' => 'success',
+        'message' => 'Attendance recorded successfully',
+        'user_name' => $assignment['name'],
+        'lcd_message' => $assignment['name'] . ' - ' . $message,
+        'buzzer_tone' => 'SUCCESS_TONE',
+        'log_type' => $data['log_type']
+    ]);
 
 } catch (Exception $e) {
-    $db->connect()->rollBack();
-    error_log("Device data processing error: " . $e->getMessage());
-    http_response_code(500);
-    echo json_encode(['error' => 'Internal server error']);
+    if ($db->connect()->inTransaction()) {
+        $db->connect()->rollBack();
+    }
+
+    $errorMessage = $e->getMessage();
+    error_log("Device data processing error: " . $errorMessage);
+    
+    http_response_code(400);
+    echo json_encode([
+        'status' => 'error',
+        'message' => $errorMessage,
+        'lcd_message' => 'Error: ' . $errorMessage,
+        'buzzer_tone' => 'ERROR_TONE'
+    ]);
 }
-
-// api/devices.php
-
-
-// Handles physical device communication
-// Accepts device data (RFID scans, LCD messages, buzzer tones)
-// Records device logs and attendance
-// No authentication required (device-to-server)
-// Used by Arduino/ESP8266
