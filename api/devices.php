@@ -19,7 +19,7 @@ if (!$data) {
 }
 
 // Required fields
-$required_fields = ['rfid_uid', 'log_type', 'verification_type'];
+$required_fields = ['rfid_uid'];
 foreach ($required_fields as $field) {
     if (!isset($data[$field])) {
         http_response_code(400);
