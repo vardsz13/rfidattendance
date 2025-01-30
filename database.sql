@@ -46,49 +46,29 @@ CREATE TABLE rfid_assignments (
     INDEX idx_rfid_assignment (rfid_id, user_id, is_active)
 );
 
--- Time IN logs
-CREATE TABLE time_in_logs (
+-- Simplified attendance logs table (combined IN/OUT)
+CREATE TABLE attendance_logs (
     id INT PRIMARY KEY AUTO_INCREMENT,
     assignment_id INT NOT NULL,
-    time_in TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    attendance_date DATE GENERATED ALWAYS AS (DATE(time_in)) STORED,
-    status ENUM('on_time', 'late') NOT NULL,
+    log_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    log_type ENUM('in', 'out') NOT NULL,
+    status ENUM('on_time', 'late') NULL,
+    attendance_date DATE GENERATED ALWAYS AS (DATE(log_time)) STORED,
     FOREIGN KEY (assignment_id) REFERENCES rfid_assignments(id),
-    UNIQUE KEY unique_daily_timein (assignment_id, attendance_date)
+    INDEX idx_assignment_date (assignment_id, attendance_date, log_type)
 );
 
--- Time OUT logs
-CREATE TABLE time_out_logs (
+-- Device logs table
+CREATE TABLE device_logs (
     id INT PRIMARY KEY AUTO_INCREMENT,
-    assignment_id INT NOT NULL,
-    time_out TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    attendance_date DATE GENERATED ALWAYS AS (DATE(time_out)) STORED,
-    FOREIGN KEY (assignment_id) REFERENCES rfid_assignments(id),
-    UNIQUE KEY unique_daily_timeout (assignment_id, attendance_date)
+    rfid_uid VARCHAR(50),
+    log_type ENUM('in', 'out') NOT NULL,
+    verification_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    buzzer_tone VARCHAR(50),
+    status ENUM('success', 'failed', 'pending') DEFAULT 'pending',
+    INDEX idx_verification_time (verification_time),
+    INDEX idx_rfid_uid (rfid_uid)
 );
-
--- Daily attendance summary view
-CREATE VIEW daily_attendance_summary AS
-SELECT 
-    u.id as user_id,
-    u.name as user_name,
-    rc.rfid_uid,
-    ti.attendance_date,
-    TIME(ti.time_in) as time_in,
-    TIME(to_logs.time_out) as time_out,
-    ti.status as attendance_status,
-    CASE 
-        WHEN ti.id IS NULL THEN 'absent'
-        ELSE ti.status
-    END as status
-FROM users u
-JOIN rfid_assignments ra ON u.id = ra.user_id
-JOIN rfid_cards rc ON ra.rfid_id = rc.id
-LEFT JOIN time_in_logs ti ON ra.id = ti.assignment_id
-LEFT JOIN time_out_logs to_logs ON ra.id = to_logs.assignment_id 
-    AND ti.attendance_date = to_logs.attendance_date
-WHERE u.role != 'admin' AND ra.is_active = true
-GROUP BY u.id, u.name, ti.attendance_date;
 
 -- Holidays table
 CREATE TABLE holidays (
@@ -119,10 +99,6 @@ VALUES ('admin', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi',
 
 -- Create indexes for better performance
 CREATE INDEX idx_user_role ON users(role);
-CREATE INDEX idx_timein_date ON time_in_logs(attendance_date);
-CREATE INDEX idx_timeout_date ON time_out_logs(attendance_date);
-CREATE INDEX idx_assignment_timein ON time_in_logs(assignment_id, attendance_date);
-CREATE INDEX idx_assignment_timeout ON time_out_logs(assignment_id, attendance_date);
 CREATE INDEX idx_holiday_date ON holidays(holiday_date);
 -- Simplified attendance table:
 

@@ -20,34 +20,30 @@ $endDate = $_GET['end_date'] ?? date('Y-m-t');
 // Get attendance records for the date range
 $attendanceLogs = $db->all(
     "SELECT 
-        a.log_time,
-        a.log_type,
-        a.sequence_number,
-        r.rfid_uid,
-        f.fingerprint_id,
-        CASE 
-            WHEN a.log_type = 'in' AND TIME(a.log_time) > '09:00:00' THEN 'late'
-            WHEN a.log_type = 'in' AND TIME(a.log_time) <= '09:00:00' THEN 'on-time'
-            ELSE NULL
-        END as status
-     FROM attendance_logs a
-     LEFT JOIN device_logs r ON a.rfid_log_id = r.id
-     LEFT JOIN device_logs f ON a.fingerprint_log_id = f.id
-     WHERE a.user_id = ? 
-     AND DATE(a.log_time) BETWEEN ? AND ?
-     ORDER BY a.log_time DESC",
+        al.log_time,
+        al.log_type,
+        al.status,
+        rc.rfid_uid
+     FROM rfid_assignments ra
+     JOIN attendance_logs al ON ra.id = al.assignment_id
+     LEFT JOIN rfid_cards rc ON ra.rfid_id = rc.id
+     WHERE ra.user_id = ? 
+     AND DATE(al.log_time) BETWEEN ? AND ?
+     ORDER BY al.log_time DESC",
     [$userId, $startDate, $endDate]
 );
 
-// Get attendance summary
+// Get summary for the period
 $summary = $db->single(
     "SELECT 
-        COUNT(DISTINCT CASE WHEN TIME(log_time) <= '09:00:00' AND log_type = 'in' THEN DATE(log_time) END) as on_time_days,
-        COUNT(DISTINCT CASE WHEN TIME(log_time) > '09:00:00' AND log_type = 'in' THEN DATE(log_time) END) as late_days,
-        COUNT(DISTINCT DATE(log_time)) as total_present_days
-     FROM attendance_logs
-     WHERE user_id = ? 
-     AND DATE(log_time) BETWEEN ? AND ?",
+        COUNT(DISTINCT CASE WHEN al.status = 'on_time' THEN DATE(al.log_time) END) as on_time_days,
+        COUNT(DISTINCT CASE WHEN al.status = 'late' THEN DATE(al.log_time) END) as late_days,
+        COUNT(DISTINCT DATE(al.log_time)) as total_present_days
+     FROM rfid_assignments ra
+     JOIN attendance_logs al ON ra.id = al.assignment_id
+     WHERE ra.user_id = ? 
+     AND DATE(al.log_time) BETWEEN ? AND ?
+     AND al.log_type = 'in'",
     [$userId, $startDate, $endDate]
 );
 
@@ -77,18 +73,30 @@ require_once dirname(__DIR__, 2) . '/includes/header.php';
     </div>
 
     <!-- Summary Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div class="bg-white rounded-lg shadow p-6">
-            <div class="text-2xl font-bold text-blue-600"><?= $summary['total_present_days'] ?></div>
-            <div class="text-sm text-gray-600">Total Days Present</div>
+            <div class="text-sm font-medium text-gray-500">Days Present</div>
+            <div class="mt-2">
+                <div class="text-2xl font-bold text-blue-600">
+                    <?= number_format($summary['total_present_days']) ?>
+                </div>
+            </div>
         </div>
         <div class="bg-white rounded-lg shadow p-6">
-            <div class="text-2xl font-bold text-green-600"><?= $summary['on_time_days'] ?></div>
-            <div class="text-sm text-gray-600">Days On Time</div>
+            <div class="text-sm font-medium text-gray-500">Days On Time</div>
+            <div class="mt-2">
+                <div class="text-2xl font-bold text-green-600">
+                    <?= number_format($summary['on_time_days']) ?>
+                </div>
+            </div>
         </div>
         <div class="bg-white rounded-lg shadow p-6">
-            <div class="text-2xl font-bold text-red-600"><?= $summary['late_days'] ?></div>
-            <div class="text-sm text-gray-600">Days Late</div>
+            <div class="text-sm font-medium text-gray-500">Days Late</div>
+            <div class="mt-2">
+                <div class="text-2xl font-bold text-yellow-600">
+                    <?= number_format($summary['late_days']) ?>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -103,26 +111,24 @@ require_once dirname(__DIR__, 2) . '/includes/header.php';
                         <th>Time</th>
                         <th>Type</th>
                         <th>Status</th>
-                        <th>RFID</th>
-                        <th>Fingerprint ID</th>
+                        <th>RFID Used</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php foreach ($attendanceLogs as $log): ?>
                         <tr>
                             <td><?= date('Y-m-d', strtotime($log['log_time'])) ?></td>
-                            <td><?= date('H:i:s', strtotime($log['log_time'])) ?></td>
+                            <td><?= date('h:i:s A', strtotime($log['log_time'])) ?></td>
                             <td><?= ucfirst($log['log_type']) ?></td>
                             <td>
-                                <?php if ($log['status']): ?>
+                                <?php if ($log['log_type'] === 'in'): ?>
                                     <span class="px-2 py-1 text-xs rounded-full 
-                                        <?= $log['status'] === 'late' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800' ?>">
+                                        <?= $log['status'] === 'late' ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800' ?>">
                                         <?= ucfirst($log['status']) ?>
-                                    </span>
+                                        </span>
                                 <?php endif; ?>
                             </td>
-                            <td><?= $log['rfid_uid'] ?></td>
-                            <td><?= $log['fingerprint_id'] ?></td>
+                            <td><?= htmlspecialchars($log['rfid_uid']) ?></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
@@ -136,7 +142,14 @@ $(document).ready(function() {
     $('#attendanceTable').DataTable({
         order: [[0, 'desc'], [1, 'desc']],
         pageLength: 25,
-        responsive: true
+        responsive: true,
+        language: {
+            emptyTable: "No attendance records found for selected period",
+            zeroRecords: "No matching records found",
+            info: "Showing _START_ to _END_ of _TOTAL_ records",
+            infoEmpty: "Showing 0 to 0 of 0 records",
+            infoFiltered: "(filtered from _MAX_ total records)"
+        }
     });
 });
 </script>

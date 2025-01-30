@@ -13,24 +13,9 @@ $db = getDatabase();
 
 // Receive and validate device data
 $data = json_decode(file_get_contents('php://input'), true);
-if (!$data) {
+if (!$data || !isset($data['rfid_uid'])) {
     http_response_code(400);
     exit(json_encode(['error' => 'Invalid data format']));
-}
-
-// Required fields
-$required_fields = ['rfid_uid', 'log_type'];
-foreach ($required_fields as $field) {
-    if (!isset($data[$field])) {
-        http_response_code(400);
-        exit(json_encode(['error' => "Missing required field: $field"]));
-    }
-}
-
-// Validate log_type
-if (!in_array($data['log_type'], ['in', 'out'])) {
-    http_response_code(400);
-    exit(json_encode(['error' => 'Invalid log type']));
 }
 
 try {
@@ -51,84 +36,59 @@ try {
         throw new Exception('Unregistered or inactive RFID card');
     }
 
-    // Get late time setting
-    $lateSetting = $db->single(
-        "SELECT setting_value FROM system_settings WHERE setting_key = 'late_time'"
-    );
-    $lateTime = $lateSetting ? $lateSetting['setting_value'] : '09:00:00';
-    
-    $currentTime = date('H:i:s');
     $currentDate = date('Y-m-d');
+    
+    // Get the last log for today (if any)
+    $lastLog = $db->single(
+        "SELECT log_type, log_time 
+         FROM attendance_logs 
+         WHERE assignment_id = ? AND attendance_date = ?
+         ORDER BY log_time DESC LIMIT 1",
+        [$assignment['id'], $currentDate]
+    );
 
-    if ($data['log_type'] === 'in') {
-        // Check if already logged in today
-        $existingTimeIn = $db->single(
-            "SELECT id FROM time_in_logs 
-             WHERE assignment_id = ? AND attendance_date = ?",
-            [$assignment['id'], $currentDate]
+    // Determine if this should be an IN or OUT log
+    $logType = (!$lastLog || $lastLog['log_type'] === 'out') ? 'in' : 'out';
+
+    // For IN logs, check if it's late
+    $status = null;
+    if ($logType === 'in') {
+        // Get late time setting
+        $lateSetting = $db->single(
+            "SELECT setting_value FROM system_settings WHERE setting_key = 'late_time'"
         );
-
-        if ($existingTimeIn) {
-            throw new Exception('Already logged in today');
-        }
-
-        // Create time in log
-        $timeInData = [
-            'assignment_id' => $assignment['id'],
-            'time_in' => date('Y-m-d H:i:s'),
-            'status' => strtotime($currentTime) <= strtotime($lateTime) ? 'on_time' : 'late'
-        ];
-
-        if (!$db->insert('time_in_logs', $timeInData)) {
-            throw new Exception('Failed to create time in log');
-        }
-
-        $message = $timeInData['status'] === 'on_time' ? 'Welcome!' : 'You are late!';
-    } else {
-        // For time out, verify there's a time in record for today
-        $timeInRecord = $db->single(
-            "SELECT id FROM time_in_logs 
-             WHERE assignment_id = ? AND attendance_date = ?",
-            [$assignment['id'], $currentDate]
-        );
-
-        if (!$timeInRecord) {
-            throw new Exception('Must log in before logging out');
-        }
-
-        // Check if already logged out
-        $existingTimeOut = $db->single(
-            "SELECT id FROM time_out_logs 
-             WHERE assignment_id = ? AND attendance_date = ?",
-            [$assignment['id'], $currentDate]
-        );
-
-        if ($existingTimeOut) {
-            throw new Exception('Already logged out today');
-        }
-
-        // Create time out log
-        $timeOutData = [
-            'assignment_id' => $assignment['id'],
-            'time_out' => date('Y-m-d H:i:s')
-        ];
-
-        if (!$db->insert('time_out_logs', $timeOutData)) {
-            throw new Exception('Failed to create time out log');
-        }
-
-        $message = 'Goodbye!';
+        $lateTime = $lateSetting ? $lateSetting['setting_value'] : '09:00:00';
+        $currentTime = date('H:i:s');
+        $status = strtotime($currentTime) <= strtotime($lateTime) ? 'on_time' : 'late';
     }
 
-    // Create device log (removed lcd_message)
+    // Create attendance log
+    $logData = [
+        'assignment_id' => $assignment['id'],
+        'log_time' => date('Y-m-d H:i:s'),
+        'log_type' => $logType,
+        'status' => $status
+    ];
+
+    if (!$db->insert('attendance_logs', $logData)) {
+        throw new Exception('Failed to create attendance log');
+    }
+
+    // Determine buzzer tone
+    $buzzerTone = 'SUCCESS_TONE';
+    if ($logType === 'in' && $status === 'late') {
+        $buzzerTone = 'LATE_TONE';
+    }
+
+    // Create device log
     $deviceLogData = [
         'rfid_uid' => $data['rfid_uid'],
-        'buzzer_tone' => 'SUCCESS_TONE',
+        'log_type' => $logType,
+        'buzzer_tone' => $buzzerTone,
         'status' => 'success'
     ];
     
-    $logId = $db->insert('device_logs', $deviceLogData);
-    if (!$logId) {
+    if (!$db->insert('device_logs', $deviceLogData)) {
         throw new Exception('Failed to create device log');
     }
 
@@ -138,8 +98,9 @@ try {
         'status' => 'success',
         'message' => 'Attendance recorded successfully',
         'user_name' => $assignment['name'],
-        'buzzer_tone' => 'SUCCESS_TONE',
-        'log_type' => $data['log_type']
+        'log_type' => $logType,
+        'buzzer_tone' => $buzzerTone,
+        'timestamp' => date('Y-m-d H:i:s')
     ]);
 
 } catch (Exception $e) {

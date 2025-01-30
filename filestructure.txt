@@ -62,7 +62,7 @@ rfid_attendance/
 │   └── devices.php          # Device AJAX handlers
 │
 ├── api/
-│   ├── verification.php     # Handles RFID + fingerprint verification requests
+
 │   └── devices.php         # Handles device communication (ESP8266)  
 │  
 ├── database.sql              # Complete database schema
