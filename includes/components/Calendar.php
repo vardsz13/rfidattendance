@@ -6,6 +6,7 @@ class Calendar {
     private $isAdmin;
     private $userId;
     private $isAuth;
+    private $userCreatedAt;
 
     public function __construct($db, $year = null, $month = null, $isAdmin = false, $userId = null) {
         $this->db = $db;
@@ -14,18 +15,14 @@ class Calendar {
         $this->isAdmin = $isAdmin;
         $this->userId = $userId;
         $this->isAuth = !is_null($userId);
-    }
-
-    private function getDaysInMonth() {
-        return date('t', strtotime("{$this->year}-{$this->month}-01"));
-    }
-
-    private function getFirstDayOfMonth() {
-        return date('w', strtotime("{$this->year}-{$this->month}-01"));
-    }
-
-    private function getMonthName() {
-        return date('F Y', strtotime("{$this->year}-{$this->month}-01"));
+        
+        if ($this->userId) {
+            $user = $db->single(
+                "SELECT DATE(created_at) as created_date FROM users WHERE id = ?", 
+                [$this->userId]
+            );
+            $this->userCreatedAt = $user ? $user['created_date'] : null;
+        }
     }
 
     private function getHolidays() {
@@ -40,9 +37,9 @@ class Calendar {
                 description
              FROM holidays 
              WHERE 
-                (is_recurring = 1) OR 
-                (is_recurring = 0 AND YEAR(holiday_date) = ?)",
-            [$this->year, $this->year]
+                (is_recurring = 1 AND MONTH(DATE(CONCAT(?, DATE_FORMAT(holiday_date, '-%m-%d')))) = ?) OR 
+                (is_recurring = 0 AND YEAR(holiday_date) = ? AND MONTH(holiday_date) = ?)",
+            [$this->year, $this->year, $this->month, $this->year, $this->month]
         );
 
         $holidayMap = [];
@@ -55,19 +52,46 @@ class Calendar {
     private function getAttendanceData() {
         $startDate = "{$this->year}-{$this->month}-01";
         $endDate = date('Y-m-t', strtotime($startDate));
+
+        // Get total users excluding admins
+        $totalUsersQuery = "SELECT COUNT(*) as count FROM users WHERE role != 'admin'";
+        if ($this->isAuth && !$this->isAdmin) {
+            $totalUsersQuery .= " AND id = ?";
+            $totalUsers = $this->db->single($totalUsersQuery, [$this->userId])['count'];
+        } else {
+            $totalUsers = $this->db->single($totalUsersQuery)['count'];
+        }
         
+        // Get attendance records with remarks
         $query = "SELECT 
                     DATE(log_time) as date,
-                    COUNT(DISTINCT user_id) as total_users,
-                    COUNT(DISTINCT CASE WHEN TIME(log_time) <= '09:00:00' AND log_type = 'in' THEN user_id END) as on_time,
-                    COUNT(DISTINCT CASE WHEN TIME(log_time) > '09:00:00' AND log_type = 'in' THEN user_id END) as late
+                    COUNT(DISTINCT user_id) as total_present,
+                    COUNT(DISTINCT CASE 
+                        WHEN TIME(log_time) <= '09:00:00' AND log_type = 'in' 
+                        THEN user_id 
+                    END) as on_time,
+                    COUNT(DISTINCT CASE 
+                        WHEN TIME(log_time) > '09:00:00' AND log_type = 'in' 
+                        THEN user_id 
+                    END) as late,
+                    COUNT(DISTINCT CASE 
+                        WHEN remarks = 'excused' 
+                        THEN user_id 
+                    END) as excused,
+                    COUNT(DISTINCT CASE 
+                        WHEN remarks = 'half_day' 
+                        THEN user_id 
+                    END) as half_day,
+                    COUNT(DISTINCT CASE 
+                        WHEN remarks = 'vacation' 
+                        THEN user_id 
+                    END) as vacation
                  FROM attendance_logs ";
 
+        $params = [];
         if ($this->isAuth && !$this->isAdmin) {
             $query .= "WHERE user_id = ? ";
-            $params = [$this->userId];
-        } else {
-            $params = [];
+            $params[] = $this->userId;
         }
 
         $query .= "AND DATE(log_time) BETWEEN ? AND ? 
@@ -77,53 +101,69 @@ class Calendar {
         
         $attendance = $this->db->all($query, $params);
         
+        // Process attendance data to include all remarks
         $attendanceMap = [];
-        foreach ($attendance as $record) {
-            $attendanceMap[$record['date']] = $record;
+        $currentDate = strtotime($startDate);
+        $endTimestamp = strtotime($endDate);
+        
+        while ($currentDate <= $endTimestamp) {
+            $dateStr = date('Y-m-d', $currentDate);
+            $found = false;
+            
+            foreach ($attendance as $record) {
+                if ($record['date'] === $dateStr) {
+                    // Calculate actual absent (excluding excused, vacation, etc.)
+                    $nonAbsent = $record['total_present'] + 
+                                $record['excused'] + 
+                                $record['vacation'] + 
+                                $record['half_day'];
+                    
+                    $attendanceMap[$dateStr] = array_merge($record, [
+                        'total_active_users' => $totalUsers,
+                        'absent' => $totalUsers - $nonAbsent
+                    ]);
+                    $found = true;
+                    break;
+                }
+            }
+            
+            // If no attendance record found for this date, create default record
+            if (!$found && $dateStr <= date('Y-m-d')) {
+                $attendanceMap[$dateStr] = [
+                    'date' => $dateStr,
+                    'total_present' => 0,
+                    'on_time' => 0,
+                    'late' => 0,
+                    'excused' => 0,
+                    'half_day' => 0,
+                    'vacation' => 0,
+                    'total_active_users' => $totalUsers,
+                    'absent' => $totalUsers
+                ];
+            }
+            
+            $currentDate = strtotime('+1 day', $currentDate);
         }
-        return $attendanceMap;
+        
+        return ['map' => $attendanceMap, 'total_users' => $totalUsers];
     }
 
-    public function getStatsCards() {
-        if (!$this->isAdmin) return '';
+    private function getDaysInMonth() {
+        return date('t', strtotime("{$this->year}-{$this->month}-01"));
+    }
 
-        $today = date('Y-m-d');
-        $stats = $this->db->single(
-            "SELECT 
-                (SELECT COUNT(*) FROM users WHERE role = 'user') as total_users,
-                COUNT(DISTINCT CASE WHEN DATE(log_time) = ? AND log_type = 'in' THEN user_id END) as present_today,
-                COUNT(DISTINCT CASE WHEN TIME(log_time) <= '09:00:00' AND DATE(log_time) = ? AND log_type = 'in' THEN user_id END) as on_time_today
-             FROM attendance_logs",
-            [$today, $today]
-        );
+    private function getFirstDayOfMonth() {
+        return date('w', strtotime("{$this->year}-{$this->month}-01"));
+    }
 
-        $absent = $stats['total_users'] - $stats['present_today'];
-
-        return <<<HTML
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-700">Total Users</h3>
-                <p class="text-3xl font-bold text-blue-600">{$stats['total_users']}</p>
-            </div>
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-700">Present Today</h3>
-                <p class="text-3xl font-bold text-green-600">{$stats['present_today']}</p>
-            </div>
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-700">On Time Today</h3>
-                <p class="text-3xl font-bold text-emerald-600">{$stats['on_time_today']}</p>
-            </div>
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-700">Absent Today</h3>
-                <p class="text-3xl font-bold text-red-600">$absent</p>
-            </div>
-        </div>
-        HTML;
+    private function getMonthName() {
+        return date('F Y', strtotime("{$this->year}-{$this->month}-01"));
     }
 
     public function render() {
         $holidays = $this->getHolidays();
-        $attendance = $this->getAttendanceData();
+        $attendanceData = $this->getAttendanceData();
+        $attendance = $attendanceData['map'];
         $daysInMonth = $this->getDaysInMonth();
         $firstDay = $this->getFirstDayOfMonth();
         $monthName = $this->getMonthName();
@@ -156,38 +196,44 @@ class Calendar {
         }
 
         // Days of the month
+        $today = date('Y-m-d');
         for ($day = 1; $day <= $daysInMonth; $day++) {
             $date = sprintf('%s-%02d-%02d', $this->year, $this->month, $day);
             $isHoliday = isset($holidays[$date]);
-            $hasAttendance = isset($attendance[$date]);
+            $hasAttendance = isset($attendance[$date]) && 
+                            ($attendance[$date]['total_present'] > 0 || 
+                             $attendance[$date]['excused'] > 0 || 
+                             $attendance[$date]['vacation'] > 0);
+            $isToday = $date === $today;
+            $isFutureDate = $date > $today;
+            $isBeforeCreation = $this->userCreatedAt && $date < $this->userCreatedAt;
 
             $cellClass = 'h-24 border border-gray-200 p-2 cursor-pointer hover:bg-gray-50 relative';
             if ($isHoliday) {
                 $cellClass .= ' bg-blue-50';
             }
+            if ($isToday) {
+                $cellClass .= ' ring-2 ring-blue-500 ring-inset';
+            }
+            if ($isBeforeCreation) {
+                $cellClass .= ' bg-gray-50';
+            }
 
             $html .= "<div class='$cellClass' onclick='showDayDetails(\"$date\")'>";
-            $html .= "<div class='font-semibold'>$day</div>";
+            
+            // Day number
+            $dayClass = $isToday ? 'font-semibold text-blue-600' : 'font-semibold';
+            $html .= "<div class='$dayClass'>$day</div>";
 
+            // Show only holiday name or attendance indicator
             if ($isHoliday) {
                 $html .= sprintf(
                     '<div class="text-xs text-blue-600 mt-1">%s</div>', 
                     htmlspecialchars($holidays[$date]['title'])
                 );
-            }
-
-            if ($hasAttendance) {
-                $record = $attendance[$date];
-                $total = $record['total_users'];
-                $attendanceClass = $record['on_time'] > ($total / 2) 
-                    ? 'bg-green-100 text-green-800' 
-                    : 'bg-yellow-100 text-yellow-800';
-                
-                $html .= sprintf(
-                    '<div class="mt-1 text-xs px-2 py-1 rounded-full %s">%d Present</div>',
-                    $attendanceClass,
-                    $total
-                );
+            } elseif (!$isFutureDate && !$isBeforeCreation) {
+                $statusDot = $hasAttendance ? 'text-green-600' : 'text-red-600';
+                $html .= "<div class='mt-1 text-xs {$statusDot}'>•</div>";
             }
 
             $html .= '</div>';
