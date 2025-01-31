@@ -3,15 +3,23 @@
 require_once '../includes/functions.php';
 header('Content-Type: application/json');
 
-// Only accept POST requests from devices
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+if ($_SERVER['REQUEST_METHOD'] !== 'POST' && !isset($_GET['check_mode'])) {
     http_response_code(405);
     exit(json_encode(['error' => 'Method not allowed']));
 }
 
 $db = getDatabase();
 
-// Receive and validate device data
+// Handle mode check request from ESP8266
+if (isset($_GET['check_mode'])) {
+    $mode = $db->single(
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'device_mode'"
+    );
+    echo json_encode(['mode' => $mode['setting_value'] ?? 'scan']);
+    exit();
+}
+
+// Handle RFID scan/registration
 $data = json_decode(file_get_contents('php://input'), true);
 if (!$data || !isset($data['rfid_uid'])) {
     http_response_code(400);
@@ -19,102 +27,83 @@ if (!$data || !isset($data['rfid_uid'])) {
 }
 
 try {
-    // Begin transaction
     $db->connect()->beginTransaction();
-    
-    // Get RFID assignment
-    $assignment = $db->single(
-        "SELECT ra.id, ra.user_id, u.name 
-         FROM rfid_assignments ra
-         JOIN rfid_cards rc ON ra.rfid_id = rc.id
-         JOIN users u ON ra.user_id = u.id
-         WHERE rc.rfid_uid = ? AND ra.is_active = true",
-        [$data['rfid_uid']]
-    );
+    $currentMode = $db->single(
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'device_mode'"
+    )['setting_value'];
 
-    if (!$assignment) {
-        throw new Exception('Unregistered or inactive RFID card');
-    }
-
-    $currentDate = date('Y-m-d');
-    
-    // Get the last log for today (if any)
-    $lastLog = $db->single(
-        "SELECT log_type, log_time 
-         FROM attendance_logs 
-         WHERE assignment_id = ? AND attendance_date = ?
-         ORDER BY log_time DESC LIMIT 1",
-        [$assignment['id'], $currentDate]
-    );
-
-    // Determine if this should be an IN or OUT log
-    $logType = (!$lastLog || $lastLog['log_type'] === 'out') ? 'in' : 'out';
-
-    // For IN logs, check if it's late
-    $status = null;
-    if ($logType === 'in') {
-        // Get late time setting
-        $lateSetting = $db->single(
-            "SELECT setting_value FROM system_settings WHERE setting_key = 'late_time'"
+    if ($currentMode === 'register') {
+        // Check if RFID already exists
+        $existing = $db->single(
+            "SELECT id FROM rfid_cards WHERE rfid_uid = ?",
+            [$data['rfid_uid']]
         );
-        $lateTime = $lateSetting ? $lateSetting['setting_value'] : '09:00:00';
-        $currentTime = date('H:i:s');
-        $status = strtotime($currentTime) <= strtotime($lateTime) ? 'on_time' : 'late';
-    }
 
-    // Create attendance log
-    $logData = [
-        'assignment_id' => $assignment['id'],
-        'log_time' => date('Y-m-d H:i:s'),
-        'log_type' => $logType,
-        'status' => $status
-    ];
+        if (!$existing) {
+            // Register new RFID card
+            if ($db->insert('rfid_cards', [
+                'rfid_uid' => $data['rfid_uid'],
+                'registered_at' => date('Y-m-d H:i:s')
+            ])) {
+                echo json_encode([
+                    'status' => 'success',
+                    'message' => 'RFID registered successfully',
+                    'buzzer_tone' => 'SUCCESS_TONE'
+                ]);
+            } else {
+                throw new Exception('Failed to register RFID');
+            }
+        } else {
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'RFID already registered',
+                'buzzer_tone' => 'ERROR_TONE'
+            ]);
+        }
+    } else {
+        // Scan mode - validate RFID
+        $assignment = $db->single(
+            "SELECT ra.*, u.name 
+             FROM rfid_cards rc
+             JOIN rfid_assignments ra ON rc.id = ra.rfid_id
+             JOIN users u ON ra.user_id = u.id
+             WHERE rc.rfid_uid = ? AND ra.is_active = true",
+            [$data['rfid_uid']]
+        );
 
-    if (!$db->insert('attendance_logs', $logData)) {
-        throw new Exception('Failed to create attendance log');
-    }
+        if ($assignment) {
+            // Create attendance log
+            $logData = [
+                'assignment_id' => $assignment['id'],
+                'time_in' => date('Y-m-d H:i:s'),
+                'status' => strtotime(date('H:i:s')) <= strtotime('09:00:00') ? 'on_time' : 'late'
+            ];
 
-    // Determine buzzer tone
-    $buzzerTone = 'SUCCESS_TONE';
-    if ($logType === 'in' && $status === 'late') {
-        $buzzerTone = 'LATE_TONE';
-    }
-
-    // Create device log
-    $deviceLogData = [
-        'rfid_uid' => $data['rfid_uid'],
-        'log_type' => $logType,
-        'buzzer_tone' => $buzzerTone,
-        'status' => 'success'
-    ];
-    
-    if (!$db->insert('device_logs', $deviceLogData)) {
-        throw new Exception('Failed to create device log');
+            if ($db->insert('time_in_logs', $logData)) {
+                echo json_encode([
+                    'status' => 'success',
+                    'message' => 'Attendance recorded',
+                    'user_name' => $assignment['name'],
+                    'buzzer_tone' => $logData['status'] === 'on_time' ? 'SUCCESS_TONE' : 'LATE_TONE'
+                ]);
+            } else {
+                throw new Exception('Failed to record attendance');
+            }
+        } else {
+            echo json_encode([
+                'status' => 'error',
+                'message' => 'Invalid or unassigned RFID',
+                'buzzer_tone' => 'ERROR_TONE'
+            ]);
+        }
     }
 
     $db->connect()->commit();
-
-    echo json_encode([
-        'status' => 'success',
-        'message' => 'Attendance recorded successfully',
-        'user_name' => $assignment['name'],
-        'log_type' => $logType,
-        'buzzer_tone' => $buzzerTone,
-        'timestamp' => date('Y-m-d H:i:s')
-    ]);
-
 } catch (Exception $e) {
-    if ($db->connect()->inTransaction()) {
-        $db->connect()->rollBack();
-    }
-
-    $errorMessage = $e->getMessage();
-    error_log("Device data processing error: " . $errorMessage);
-    
-    http_response_code(400);
+    $db->connect()->rollBack();
+    http_response_code(500);
     echo json_encode([
-        'status' => 'error',
-        'message' => $errorMessage,
+        'error' => $e->getMessage(),
         'buzzer_tone' => 'ERROR_TONE'
     ]);
 }
