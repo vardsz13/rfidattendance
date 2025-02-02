@@ -5,7 +5,9 @@ require_once dirname(__DIR__, 2) . '/includes/functions.php';
 
 requireAdmin();
 
-$db = getDatabase();$success = '';
+$db = getDatabase();
+$success = '';
+$error = ''; // Initialize $error variable
 
 // Get unassigned RFID cards
 $unassignedCards = $db->all(
@@ -103,7 +105,7 @@ require_once dirname(__DIR__, 2) . '/includes/header.php';
         <?php if (empty($unassignedCards) || empty($availableUsers)): ?>
             <div class="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded mb-4">
                 <?php if (empty($unassignedCards)): ?>
-                    No unassigned RFID cards available. Switch to register mode to add new cards.
+                    No unassigned RFID cards available. <a href="register.php" class="text-blue-500 hover:text-blue-700">Switch to register mode</a> to add new cards.
                 <?php else: ?>
                     No users available for assignment.
                 <?php endif; ?>

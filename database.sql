@@ -11,7 +11,8 @@ CREATE TABLE system_settings (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
-
+INSERT INTO system_settings (setting_key, setting_value, setting_description) VALUES
+('device_mode', 'scan', 'Current operating mode for RFID devices (scan/register)');
 -- Insert default settings
 INSERT INTO system_settings (setting_key, setting_value, setting_description) VALUES
 ('late_time', '09:00:00', 'Time after which attendance is marked as late (24-hour format)');
