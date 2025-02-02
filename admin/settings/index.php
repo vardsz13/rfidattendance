@@ -4,6 +4,7 @@ require_once dirname(__DIR__, 2) . '/config/constants.php';
 require_once dirname(__DIR__, 2) . '/includes/auth_functions.php';
 require_once dirname(__DIR__, 2) . '/includes/functions.php';
 
+session_start();
 requireAdmin();
 
 $db = getDatabase();

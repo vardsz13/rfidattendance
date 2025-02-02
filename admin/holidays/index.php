@@ -5,7 +5,6 @@ require_once dirname(__DIR__, 2) . '/includes/functions.php';
 
 requireAdmin();
 $useDataTables = true;
-
 $db = getDatabase();
 
 // Get all holidays

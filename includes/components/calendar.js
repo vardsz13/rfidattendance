@@ -49,16 +49,13 @@ function showDayDetails(date) {
             } 
             // Handle today and past dates
             else if (!response.holiday) {
-                // Show attendance summary with all remarks
+                // Show attendance summary with all statuses
                 if (response.attendance) {
                     const {
                         total_present,
                         on_time,
                         late,
-                        excused,
-                        half_day,
-                        vacation,
-                        absent,
+                        still_in,
                         total_users,
                         isToday
                     } = response.attendance;
@@ -91,21 +88,17 @@ function showDayDetails(date) {
                                 </div>
                             </div>
 
-                            <!-- Excused Section -->
-                            <div class="col-span-2 p-3 bg-blue-50 rounded">
-                                <h4 class="font-semibold text-blue-800 mb-2">Other Remarks</h4>
-                                <div class="grid grid-cols-3 gap-2">
+                            <!-- Current Status Section -->
+                            <div class="col-span-2 p-3 bg-purple-50 rounded">
+                                <h4 class="font-semibold text-purple-800 mb-2">Current Status</h4>
+                                <div class="grid grid-cols-2 gap-2">
                                     <div class="text-center">
-                                        <div class="text-lg font-semibold text-blue-600">${excused}</div>
-                                        <div class="text-sm text-blue-600">Excused</div>
+                                        <div class="text-lg font-semibold text-purple-600">${still_in}</div>
+                                        <div class="text-sm text-purple-600">Currently In</div>
                                     </div>
                                     <div class="text-center">
-                                        <div class="text-lg font-semibold text-purple-600">${half_day}</div>
-                                        <div class="text-sm text-purple-600">Half Day</div>
-                                    </div>
-                                    <div class="text-center">
-                                        <div class="text-lg font-semibold text-indigo-600">${vacation}</div>
-                                        <div class="text-sm text-indigo-600">Vacation</div>
+                                        <div class="text-lg font-semibold text-blue-600">${total_present - still_in}</div>
+                                        <div class="text-sm text-blue-600">Checked Out</div>
                                     </div>
                                 </div>
                             </div>
@@ -113,7 +106,9 @@ function showDayDetails(date) {
                             <!-- Absent Section -->
                             <div class="col-span-2 p-3 bg-red-50 rounded">
                                 <div class="text-center">
-                                    <div class="text-lg font-semibold text-red-600">${absent}</div>
+                                    <div class="text-lg font-semibold text-red-600">
+                                        ${total_users - total_present}
+                                    </div>
                                     <div class="text-sm text-red-600">Absent</div>
                                 </div>
                             </div>
@@ -126,6 +121,36 @@ function showDayDetails(date) {
                                 </div>
                             </div>
                         </div>`;
+
+                    // If it's admin view and there are attendance records, show detailed list
+                    if (response.detailedRecords && response.detailedRecords.length > 0) {
+                        content += `
+                            <div class="mt-4">
+                                <h4 class="font-semibold text-gray-800 mb-2">Detailed Records</h4>
+                                <div class="space-y-2">
+                                    ${response.detailedRecords.map(record => `
+                                        <div class="p-2 border rounded">
+                                            <div class="flex justify-between items-center">
+                                                <div>
+                                                    <div class="font-medium">${record.user_name}</div>
+                                                    <div class="text-sm text-gray-600">
+                                                        In: ${formatTime(record.time_in)}
+                                                        ${record.time_out ? ` • Out: ${formatTime(record.time_out)}` : ''}
+                                                    </div>
+                                                </div>
+                                                <span class="px-2 py-1 text-xs rounded-full ${
+                                                    record.status === 'late' 
+                                                    ? 'bg-yellow-100 text-yellow-800' 
+                                                    : 'bg-green-100 text-green-800'
+                                                }">
+                                                    ${record.status === 'late' ? 'Late' : 'On Time'}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>`;
+                    }
                 } else {
                     content += `
                         <div class="p-3 bg-gray-50 rounded text-center">
@@ -141,15 +166,36 @@ function showDayDetails(date) {
         },
         error: function(xhr, status, error) {
             console.error('Error fetching day details:', error);
+            console.error('Server response:', xhr.responseText);
             const modal = $('#dayDetailsModal');
             const modalContent = $('#modalContent');
+            
+            let errorMessage = 'Error loading attendance data. Please try again.';
+            try {
+                const response = JSON.parse(xhr.responseText);
+                if (response.error) {
+                    errorMessage = response.error;
+                }
+            } catch (e) {
+                console.error('Error parsing response:', e);
+            }
+            
             modalContent.html(`
                 <div class="p-3 bg-red-100 text-red-700 rounded text-center">
-                    Error loading attendance data. Please try again.
+                    ${errorMessage}
                 </div>
             `);
             modal.removeClass('hidden');
         }
+    });
+}
+
+function formatTime(timeString) {
+    if (!timeString) return '';
+    return new Date(`2000-01-01T${timeString}`).toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
     });
 }
 

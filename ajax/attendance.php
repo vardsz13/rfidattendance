@@ -1,7 +1,15 @@
 <?php
 // ajax/attendance.php
-require_once dirname(__DIR__) . '/includes/functions.php';
+require_once dirname(__DIR__) . '/config/constants.php';
 require_once dirname(__DIR__) . '/includes/auth_functions.php';
+require_once dirname(__DIR__) . '/includes/functions.php';
+
+if (!isLoggedIn()) {
+    header('Content-Type: application/json');
+    http_response_code(401);
+    echo json_encode(['error' => 'Unauthorized']);
+    exit();
+}
 
 header('Content-Type: application/json');
 
@@ -24,40 +32,13 @@ try {
                 $totalUsers = $db->single($totalUsersQuery)['count'];
             }
 
-            // Get attendance summary
-            $query = "SELECT 
-                COUNT(DISTINCT CASE WHEN log_type = 'in' THEN u.id END) as total_present,
-                COUNT(DISTINCT CASE WHEN log_type = 'in' AND status = 'on_time' THEN u.id END) as on_time,
-                COUNT(DISTINCT CASE WHEN log_type = 'in' AND status = 'late' THEN u.id END) as late,
-                COUNT(DISTINCT u.id) as total_users
-             FROM users u
-             LEFT JOIN rfid_assignments ra ON u.id = ra.user_id
-             LEFT JOIN attendance_logs al ON ra.id = al.assignment_id 
-                AND DATE(al.log_time) = ?
-             WHERE u.role != 'admin'";
-
-            if (!$isAdmin && $userId) {
-                $query .= " AND u.id = ?";
-                $attendanceParams = [$date, $userId];
-            } else {
-                $attendanceParams = [$date];
-            }
-
-            $summary = $db->single($query, $attendanceParams);
-
-            // Get user creation date if not admin
-            if (!$isAdmin && $userId) {
-                $user = $db->single(
-                    "SELECT DATE(created_at) as created_date FROM users WHERE id = ?",
-                    [$userId]
-                );
-                if ($user && $date < $user['created_date']) {
-                    echo json_encode([
-                        'beforeCreation' => true,
-                        'total_users' => $totalUsers
-                    ]);
-                    exit;
-                }
+            // Check if future date
+            if ($date > date('Y-m-d')) {
+                echo json_encode([
+                    'futureDate' => true,
+                    'total_users' => $totalUsers
+                ]);
+                exit;
             }
 
             // Check if it's a holiday
@@ -72,16 +53,60 @@ try {
                 [$date, $date]
             );
 
+            // Get attendance summary
+            $query = "SELECT 
+                COUNT(DISTINCT CASE WHEN al.status = 'on_time' THEN u.id END) as on_time,
+                COUNT(DISTINCT CASE WHEN al.status = 'late' THEN u.id END) as late,
+                COUNT(DISTINCT CASE WHEN al.status = 'excused' THEN u.id END) as excused,
+                COUNT(DISTINCT CASE WHEN al.status = 'half_day' THEN u.id END) as half_day,
+                COUNT(DISTINCT CASE WHEN al.status = 'vacation' THEN u.id END) as vacation,
+                COUNT(DISTINCT CASE WHEN al.status IN ('on_time', 'late', 'excused', 'half_day', 'vacation') THEN u.id END) as total_present,
+                COUNT(DISTINCT CASE WHEN al.time_out IS NULL AND al.time_in IS NOT NULL THEN u.id END) as still_in
+             FROM users u
+             LEFT JOIN rfid_assignments ra ON u.id = ra.user_id AND ra.is_active = true
+             LEFT JOIN attendance_logs al ON ra.id = al.assignment_id 
+                AND DATE(al.log_date) = ?
+             WHERE u.role != 'admin'";
+
+            if (!$isAdmin && $userId) {
+                $query .= " AND u.id = ?";
+                $attendanceParams = [$date, $userId];
+            } else {
+                $attendanceParams = [$date];
+            }
+
+            $summary = $db->single($query, $attendanceParams);
+
+            // Get detailed records if admin
+            $detailedRecords = [];
+            if ($isAdmin) {
+                $detailedRecords = $db->all(
+                    "SELECT 
+                        u.name as user_name,
+                        u.username,
+                        al.time_in,
+                        al.time_out,
+                        al.status,
+                        al.remarks,
+                        rc.rfid_uid
+                     FROM users u
+                     LEFT JOIN rfid_assignments ra ON u.id = ra.user_id AND ra.is_active = true
+                     LEFT JOIN attendance_logs al ON ra.id = al.assignment_id 
+                        AND DATE(al.log_date) = ?
+                     LEFT JOIN rfid_cards rc ON ra.rfid_id = rc.id
+                     WHERE u.role != 'admin'
+                     ORDER BY u.name",
+                    [$date]
+                );
+            }
+
             echo json_encode([
                 'holiday' => $holiday,
-                'attendance' => [
-                    'total_present' => (int)$summary['total_present'],
-                    'on_time' => (int)$summary['on_time'],
-                    'late' => (int)$summary['late'],
-                    'absent' => $totalUsers - (int)$summary['total_present'],
+                'attendance' => array_merge($summary ?: [], [
                     'total_users' => $totalUsers,
                     'isToday' => $date === date('Y-m-d')
-                ]
+                ]),
+                'detailedRecords' => $detailedRecords
             ]);
             break;
 
@@ -89,6 +114,7 @@ try {
             throw new Exception('Invalid action');
     }
 } catch (Exception $e) {
+    error_log("Attendance AJAX Error: " . $e->getMessage());
     http_response_code(500);
     echo json_encode(['error' => $e->getMessage()]);
 }
