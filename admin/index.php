@@ -4,7 +4,6 @@ require_once dirname(__DIR__) . '/includes/auth_functions.php';
 require_once dirname(__DIR__) . '/includes/functions.php';
 require_once dirname(__DIR__) . '/includes/components/Calendar.php';
 
-session_start();
 // Enable error reporting for debugging
 error_reporting(E_ALL);
 ini_set('display_errors', 0);

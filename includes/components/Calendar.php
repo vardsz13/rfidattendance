@@ -64,23 +64,28 @@ class Calendar {
 
         // Get attendance records for each day
         $query = "SELECT 
-                    DATE(al.log_date) as date,
-                    COUNT(DISTINCT user_id) as total_present,
-                    COUNT(DISTINCT CASE WHEN al.status = 'on_time' THEN user_id END) as on_time,
-                    COUNT(DISTINCT CASE WHEN al.status = 'late' THEN user_id END) as late,
-                    COUNT(DISTINCT CASE WHEN al.time_out IS NULL THEN user_id END) as still_in
-                FROM attendance_logs al
-                JOIN rfid_assignments ra ON al.assignment_id = ra.id
-                WHERE ra.is_active = 1";
+                    DATE(log_time) as date,
+                    COUNT(DISTINCT CASE WHEN log_type = 'in' THEN user_id END) as total_present,
+                    COUNT(DISTINCT CASE 
+                        WHEN log_type = 'in' AND status = 'on_time' 
+                        THEN user_id 
+                    END) as on_time,
+                    COUNT(DISTINCT CASE 
+                        WHEN log_type = 'in' AND status = 'late' 
+                        THEN user_id 
+                    END) as late,
+                    COUNT(DISTINCT user_id) as total_attendance
+                 FROM attendance_logs al
+                 JOIN rfid_assignments ra ON al.assignment_id = ra.id";
 
         $params = [];
         if ($this->isAuth && !$this->isAdmin) {
-            $query .= " AND ra.user_id = ?";
+            $query .= " WHERE ra.user_id = ?";
             $params[] = $this->userId;
         }
 
-        $query .= " AND DATE(al.log_date) BETWEEN ? AND ?
-                   GROUP BY DATE(al.log_date)";
+        $query .= " AND DATE(log_time) BETWEEN ? AND ?
+                   GROUP BY DATE(log_time)";
         
         array_push($params, $startDate, $endDate);
         
@@ -111,7 +116,7 @@ class Calendar {
                     'total_present' => 0,
                     'on_time' => 0,
                     'late' => 0,
-                    'still_in' => 0,
+                    'total_attendance' => 0,
                     'total_active_users' => $totalUsers
                 ];
             }
@@ -146,12 +151,11 @@ class Calendar {
                 'total_present' => 0,
                 'on_time' => 0,
                 'late' => 0,
-                'still_in' => 0,
                 'total_active_users' => $attendanceData['total_users']
             ];
         }
 
-        $html = '<div class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">';
+        $html = '<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">';
 
         // Total Users Card
         $html .= '
@@ -161,7 +165,7 @@ class Calendar {
                     <p class="text-3xl font-bold text-blue-600">
                         ' . number_format($todayData['total_active_users']) . '
                     </p>
-                    <p class="text-sm text-gray-600">Registered Users</p>
+                    <p class="text-sm text-gray-600">Registered Employees</p>
                 </div>
             </div>';
 
@@ -173,14 +177,14 @@ class Calendar {
                     <p class="text-3xl font-bold text-green-600">
                         ' . number_format($todayData['total_present']) . '
                     </p>
-                    <p class="text-sm text-gray-600">Total Check-ins</p>
+                    <p class="text-sm text-gray-600">Checked In Today</p>
                 </div>
             </div>';
 
         // On Time Card
         $html .= '
             <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-700">On Time</h3>
+                <h3 class="text-lg font-semibold text-gray-700">On Time Today</h3>
                 <div class="mt-2">
                     <p class="text-3xl font-bold text-emerald-600">
                         ' . number_format($todayData['on_time']) . '
@@ -192,24 +196,12 @@ class Calendar {
         // Late Card
         $html .= '
             <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-700">Late</h3>
+                <h3 class="text-lg font-semibold text-gray-700">Late Today</h3>
                 <div class="mt-2">
-                    <p class="text-3xl font-bold text-yellow-600">
+                    <p class="text-3xl font-bold text-red-600">
                         ' . number_format($todayData['late']) . '
                     </p>
                     <p class="text-sm text-gray-600">Arrived Late</p>
-                </div>
-            </div>';
-
-        // Still In Card
-        $html .= '
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-700">Currently In</h3>
-                <div class="mt-2">
-                    <p class="text-3xl font-bold text-purple-600">
-                        ' . number_format($todayData['still_in']) . '
-                    </p>
-                    <p class="text-sm text-gray-600">Not Yet Out</p>
                 </div>
             </div>';
 
@@ -225,7 +217,6 @@ class Calendar {
         $daysInMonth = $this->getDaysInMonth();
         $firstDay = $this->getFirstDayOfMonth();
         $monthName = $this->getMonthName();
-        $today = date('Y-m-d');
 
         $html = '<div class="bg-white rounded-lg shadow p-6">';
         
@@ -255,11 +246,12 @@ class Calendar {
         }
 
         // Days of the month
+        $today = date('Y-m-d');
         for ($day = 1; $day <= $daysInMonth; $day++) {
             $date = sprintf('%s-%02d-%02d', $this->year, $this->month, $day);
             $isHoliday = isset($holidays[$date]);
-            $hasAttendance = isset($attendance[$date]) && $attendance[$date]['total_present'] > 0;
-            $attendanceInfo = $attendance[$date] ?? null;
+            $hasAttendance = isset($attendance[$date]) && 
+                            ($attendance[$date]['total_present'] > 0);
             $isToday = $date === $today;
             $isFutureDate = $date > $today;
             $isBeforeCreation = $this->userCreatedAt && $date < $this->userCreatedAt;
@@ -281,36 +273,15 @@ class Calendar {
             $dayClass = $isToday ? 'font-semibold text-blue-600' : 'font-semibold';
             $html .= "<div class='$dayClass'>$day</div>";
 
-            // Show holiday or attendance info
+            // Show only holiday name or attendance indicator
             if ($isHoliday) {
                 $html .= sprintf(
                     '<div class="text-xs text-blue-600 mt-1">%s</div>', 
                     htmlspecialchars($holidays[$date]['title'])
                 );
-            } elseif ($hasAttendance && !$isFutureDate && !$isBeforeCreation) {
-                $html .= '<div class="mt-1 text-xs">';
-                
-                // Show attendance counts
-                if ($attendanceInfo['on_time'] > 0) {
-                    $html .= sprintf(
-                        '<span class="text-green-600">✓ %d on time</span><br>',
-                        $attendanceInfo['on_time']
-                    );
-                }
-                if ($attendanceInfo['late'] > 0) {
-                    $html .= sprintf(
-                        '<span class="text-yellow-600">⌛ %d late</span><br>',
-                        $attendanceInfo['late']
-                    );
-                }
-                if ($attendanceInfo['still_in'] > 0) {
-                    $html .= sprintf(
-                        '<span class="text-purple-600">⟳ %d in</span>',
-                        $attendanceInfo['still_in']
-                    );
-                }
-                
-                $html .= '</div>';
+            } elseif (!$isFutureDate && !$isBeforeCreation) {
+                $statusDot = $hasAttendance ? 'text-green-600' : 'text-red-600';
+                $html .= "<div class='mt-1 text-xs {$statusDot}'>•</div>";
             }
 
             $html .= '</div>';

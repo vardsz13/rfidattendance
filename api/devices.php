@@ -6,6 +6,9 @@ require_once dirname(__DIR__) . '/includes/duration_helper.php';
 
 header('Content-Type: application/json');
 
+// Get database connection
+$db = getDatabase();
+
 // Handle mode check request
 if (isset($_GET['check_mode'])) {
     $mode = $db->single(
@@ -30,17 +33,10 @@ try {
         throw new Exception('Invalid request data');
     }
 
-    $db = getDatabase();
-
     // Get current device mode from database
     $deviceMode = $db->single(
         "SELECT setting_value FROM system_settings WHERE setting_key = 'device_mode'"
     )['setting_value'] ?? 'scan';
-
-    // Get late time setting
-    $lateTime = $db->single(
-        "SELECT setting_value FROM system_settings WHERE setting_key = 'late_time'"
-    )['setting_value'] ?? '09:00:00';
 
     $db->connect()->beginTransaction();
     $currentTime = date('Y-m-d H:i:s');
@@ -55,8 +51,29 @@ try {
     );
 
     if ($deviceMode === 'register') {
-        // Handle registration mode (same as before)
-        // ...
+        // Handle registration mode
+        if (!$existingCard) {
+            $cardData = [
+                'rfid_uid' => $data['rfid_uid'],
+                'registered_at' => $currentTime
+            ];
+            
+            if ($db->insert('rfid_cards', $cardData)) {
+                echo json_encode([
+                    'status' => 'success',
+                    'lcd_message' => LCD_MESSAGES['RFID_REGISTERED'],
+                    'buzzer_tone' => BUZZER_TONES['SUCCESS']
+                ]);
+            } else {
+                throw new Exception('Failed to register RFID');
+            }
+        } else {
+            echo json_encode([
+                'status' => 'error',
+                'lcd_message' => LCD_MESSAGES['RFID_EXISTS'],
+                'buzzer_tone' => BUZZER_TONES['ERROR']
+            ]);
+        }
     } else {
         // Handle scan mode
         if (!$existingCard) {
@@ -94,24 +111,22 @@ try {
             throw new Exception('Invalid or inactive assignment');
         }
 
+        // Get late time setting
+        $lateTime = $db->single(
+            "SELECT setting_value FROM system_settings WHERE setting_key = 'late_time'"
+        )['setting_value'] ?? '09:00:00';
+
         // Check existing attendance log
         $existingLog = $db->single(
             "SELECT * FROM attendance_logs 
-             WHERE assignment_id = ? AND DATE(log_date) = CURRENT_DATE
+             WHERE user_id = ? AND DATE(time_in) = CURRENT_DATE
              ORDER BY time_in DESC LIMIT 1",
-            [$assignment['id']]
+            [$assignment['user_id']]
         );
-
-        // Function to determine status based on time
-        $determineStatus = function($timeString) use ($lateTime) {
-            $scanTime = strtotime($timeString);
-            $lateTimeToday = strtotime(date('Y-m-d') . ' ' . $lateTime);
-            return $scanTime <= $lateTimeToday ? 'on_time' : 'late';
-        };
 
         if (!$existingLog || ($existingLog && $existingLog['time_out'])) {
             // Create new time-in record
-            $status = $determineStatus($currentTime);
+            $status = strtotime(date('H:i:s')) <= strtotime($lateTime) ? 'on_time' : 'late';
             
             $logData = [
                 'assignment_id' => $assignment['id'],
@@ -134,16 +149,17 @@ try {
                 throw new Exception('Failed to record time-in');
             }
         } else {
-            // Handle time-out record
+            // Calculate duration for display
             $duration = strtotime($currentTime) - strtotime($existingLog['time_in']);
+            $durationFormatted = getVerboseDuration($duration);
             
+            // Update existing record with time-out and duration
             $updateData = [
                 'time_out' => $currentTime,
                 'duration_seconds' => $duration
             ];
             
             if ($db->update('attendance_logs', $updateData, ['id' => $existingLog['id']])) {
-                $durationFormatted = getVerboseDuration($duration);
                 echo json_encode([
                     'status' => 'success',
                     'lcd_message' => LCD_MESSAGES['TIME_OUT'],
