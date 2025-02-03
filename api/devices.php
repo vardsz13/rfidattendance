@@ -1,72 +1,59 @@
 <?php
-// api/devices.php
 require_once dirname(__DIR__) . '/config/constants.php';
 require_once dirname(__DIR__) . '/includes/functions.php';
-require_once dirname(__DIR__) . '/includes/duration_helper.php';
 
 header('Content-Type: application/json');
 
-// Get database connection
 $db = getDatabase();
-
-// Handle mode check request
-if (isset($_GET['check_mode'])) {
-    $mode = $db->single(
-        "SELECT setting_value FROM system_settings WHERE setting_key = 'device_mode'"
-    );
-    echo json_encode(['mode' => $mode['setting_value'] ?? 'scan']);
-    exit();
-}
-
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    exit(json_encode([
-        'status' => 'error',
-        'lcd_message' => LCD_MESSAGES['ERROR'],
-        'buzzer_tone' => BUZZER_TONES['ERROR']
-    ]));
-}
+$data = json_decode(file_get_contents('php://input'), true);
 
 try {
-    $data = json_decode(file_get_contents('php://input'), true);
-    if (!$data || !isset($data['rfid_uid'])) {
+    $db->connect()->beginTransaction();
+    
+    if (!$data || !isset($data['verification_type'])) {
         throw new Exception('Invalid request data');
     }
 
-    // Get current device mode from database
     $deviceMode = $db->single(
         "SELECT setting_value FROM system_settings WHERE setting_key = 'device_mode'"
     )['setting_value'] ?? 'scan';
 
-    $db->connect()->beginTransaction();
-    $currentTime = date('Y-m-d H:i:s');
-    
-    // First check if RFID exists in rfid_cards
-    $existingCard = $db->single(
-        "SELECT rc.*, ra.id as assignment_id, ra.is_active 
-         FROM rfid_cards rc
-         LEFT JOIN rfid_assignments ra ON rc.id = ra.rfid_id
-         WHERE rc.rfid_uid = ?",
-        [$data['rfid_uid']]
-    );
-
     if ($deviceMode === 'register') {
-        // Handle registration mode
+        handleRegistrationMode($db, $data);
+    } else {
+        handleVerificationMode($db, $data);
+    }
+
+    $db->connect()->commit();
+} catch (Exception $e) {
+    $db->connect()->rollBack();
+    http_response_code(400);
+    echo json_encode([
+        'status' => 'error',
+        'message' => $e->getMessage(),
+        'lcd_message' => LCD_MESSAGES['ERROR'],
+        'buzzer_tone' => BUZZER_TONES['ERROR']
+    ]);
+}
+
+function handleRegistrationMode($db, $data) {
+    if ($data['verification_type'] === 'rfid' && isset($data['rfid_uid'])) {
+        $existingCard = $db->single(
+            "SELECT * FROM rfid_cards WHERE rfid_uid = ?", 
+            [$data['rfid_uid']]
+        );
+
         if (!$existingCard) {
-            $cardData = [
+            $db->insert('rfid_cards', [
                 'rfid_uid' => $data['rfid_uid'],
-                'registered_at' => $currentTime
-            ];
-            
-            if ($db->insert('rfid_cards', $cardData)) {
-                echo json_encode([
-                    'status' => 'success',
-                    'lcd_message' => LCD_MESSAGES['RFID_REGISTERED'],
-                    'buzzer_tone' => BUZZER_TONES['SUCCESS']
-                ]);
-            } else {
-                throw new Exception('Failed to register RFID');
-            }
+                'registered_at' => date('Y-m-d H:i:s')
+            ]);
+
+            echo json_encode([
+                'status' => 'success',
+                'lcd_message' => LCD_MESSAGES['RFID_REGISTERED'],
+                'buzzer_tone' => BUZZER_TONES['SUCCESS']
+            ]);
         } else {
             echo json_encode([
                 'status' => 'error',
@@ -74,120 +61,141 @@ try {
                 'buzzer_tone' => BUZZER_TONES['ERROR']
             ]);
         }
-    } else {
-        // Handle scan mode
-        if (!$existingCard) {
-            echo json_encode([
-                'status' => 'error',
-                'lcd_message' => LCD_MESSAGES['RFID_FAILED'],
-                'buzzer_tone' => BUZZER_TONES['ERROR'],
-                'message' => 'Unregistered RFID'
-            ]);
-            $db->connect()->commit();
-            exit();
-        }
+        return;
+    }
+}
 
-        if (!$existingCard['assignment_id'] || !$existingCard['is_active']) {
-            echo json_encode([
-                'status' => 'error',
-                'lcd_message' => LCD_MESSAGES['RFID_FAILED'],
-                'buzzer_tone' => BUZZER_TONES['ERROR'],
-                'message' => 'Unassigned RFID'
-            ]);
-            $db->connect()->commit();
-            exit();
-        }
-
-        // Get user assignment details
-        $assignment = $db->single(
-            "SELECT ra.*, u.id as user_id, u.name, u.username 
-             FROM rfid_assignments ra
-             JOIN users u ON ra.user_id = u.id
-             WHERE ra.id = ? AND ra.is_active = true",
-            [$existingCard['assignment_id']]
-        );
-
-        if (!$assignment) {
-            throw new Exception('Invalid or inactive assignment');
-        }
-
-        // Get late time setting
-        $lateTime = $db->single(
-            "SELECT setting_value FROM system_settings WHERE setting_key = 'late_time'"
-        )['setting_value'] ?? '09:00:00';
-
-        // Check existing attendance log
-        $existingLog = $db->single(
-            "SELECT * FROM attendance_logs 
-             WHERE user_id = ? AND DATE(time_in) = CURRENT_DATE
-             ORDER BY time_in DESC LIMIT 1",
-            [$assignment['user_id']]
-        );
-
-        if (!$existingLog || ($existingLog && $existingLog['time_out'])) {
-            // Create new time-in record
-            $status = strtotime(date('H:i:s')) <= strtotime($lateTime) ? 'on_time' : 'late';
-            
-            $logData = [
-                'assignment_id' => $assignment['id'],
-                'user_id' => $assignment['user_id'],
-                'time_in' => $currentTime,
-                'status' => $status
-            ];
-
-            if ($db->insert('attendance_logs', $logData)) {
-                echo json_encode([
-                    'status' => 'success',
-                    'lcd_message' => $status === 'late' ? LCD_MESSAGES['LATE'] : LCD_MESSAGES['ON_TIME'],
-                    'buzzer_tone' => $status === 'late' ? BUZZER_TONES['LATE'] : BUZZER_TONES['SUCCESS'],
-                    'user_name' => $assignment['name'],
-                    'timestamp' => $currentTime,
-                    'log_type' => 'in',
-                    'status' => $status
-                ]);
-            } else {
-                throw new Exception('Failed to record time-in');
-            }
-        } else {
-            // Calculate duration for display
-            $duration = strtotime($currentTime) - strtotime($existingLog['time_in']);
-            $durationFormatted = getVerboseDuration($duration);
-            
-            // Update existing record with time-out and duration
-            $updateData = [
-                'time_out' => $currentTime,
-                'duration_seconds' => $duration
-            ];
-            
-            if ($db->update('attendance_logs', $updateData, ['id' => $existingLog['id']])) {
-                echo json_encode([
-                    'status' => 'success',
-                    'lcd_message' => LCD_MESSAGES['TIME_OUT'],
-                    'duration_message' => "Duration: " . $durationFormatted,
-                    'buzzer_tone' => BUZZER_TONES['SUCCESS'],
-                    'user_name' => $assignment['name'],
-                    'timestamp' => $currentTime,
-                    'log_type' => 'out'
-                ]);
-            } else {
-                throw new Exception('Failed to record time-out');
-            }
-        }
+function handleVerificationMode($db, $data) {
+    if (!isset($_SESSION['verification'])) {
+        $_SESSION['verification'] = [
+            'timestamp' => time(),
+            'rfid_verified' => false,
+            'user_id' => null
+        ];
     }
 
-    $db->connect()->commit();
-
-} catch (Exception $e) {
-    if ($db->connect()->inTransaction()) {
-        $db->connect()->rollBack();
+    if ((time() - $_SESSION['verification']['timestamp']) > VERIFICATION_TIMEOUT) {
+        $_SESSION['verification'] = [
+            'timestamp' => time(),
+            'rfid_verified' => false,
+            'user_id' => null
+        ];
     }
-    
-    error_log("Device API Error: " . $e->getMessage());
-    http_response_code(400);
+
+    if ($data['verification_type'] === 'rfid') {
+        handleRFIDVerification($db, $data);
+    } else if ($data['verification_type'] === 'fingerprint') {
+        handleFingerprintVerification($db, $data);
+    }
+}
+
+function handleRFIDVerification($db, $data) {
+    $verificationData = $db->single(
+        "SELECT uvd.*, u.user_type, u.remarks, u.id as user_id 
+         FROM user_verification_data uvd
+         JOIN users u ON uvd.user_id = u.id
+         JOIN rfid_cards rc ON uvd.rfid_id = rc.id
+         WHERE rc.rfid_uid = ? AND uvd.is_active = true",
+        [$data['rfid_uid']]
+    );
+
+    if (!$verificationData) {
+        echo json_encode([
+            'status' => 'error',
+            'lcd_message' => LCD_MESSAGES['RFID_FAILED'],
+            'buzzer_tone' => BUZZER_TONES['ERROR']
+        ]);
+        return;
+    }
+
+    $_SESSION['verification']['rfid_verified'] = true;
+    $_SESSION['verification']['user_id'] = $verificationData['user_id'];
+    $_SESSION['verification']['timestamp'] = time();
+
+    if ($verificationData['user_type'] === 'special') {
+        processAttendance($db, $verificationData, $data['device_id']);
+        return;
+    }
+
     echo json_encode([
-        'status' => 'error',
-        'message' => $e->getMessage(),
-        'lcd_message' => LCD_MESSAGES['ERROR'],
-        'buzzer_tone' => BUZZER_TONES['ERROR']
+        'status' => 'success',
+        'verification_type' => 'rfid',
+        'lcd_message' => LCD_MESSAGES['FINGER_REQUIRED'],
+        'buzzer_tone' => BUZZER_TONES['WAIT']
+    ]);
+}
+
+function handleFingerprintVerification($db, $data) {
+    if (!$_SESSION['verification']['rfid_verified']) {
+        echo json_encode([
+            'status' => 'error',
+            'lcd_message' => LCD_MESSAGES['SCAN_RFID'],
+            'buzzer_tone' => BUZZER_TONES['ERROR']
+        ]);
+        return;
+    }
+
+    $verificationData = $db->single(
+        "SELECT uvd.*, u.user_type, u.remarks 
+         FROM user_verification_data uvd
+         JOIN users u ON uvd.user_id = u.id
+         WHERE uvd.user_id = ? AND uvd.fingerprint_id = ? AND uvd.is_active = true",
+        [$_SESSION['verification']['user_id'], $data['fingerprint_id']]
+    );
+
+    if (!$verificationData) {
+        echo json_encode([
+            'status' => 'error',
+            'lcd_message' => LCD_MESSAGES['FINGER_FAILED'],
+            'buzzer_tone' => BUZZER_TONES['ERROR']
+        ]);
+        return;
+    }
+
+    processAttendance($db, $verificationData, $data['device_id']);
+}
+
+function processAttendance($db, $verificationData, $deviceId) {
+    // Check if already logged attendance today
+    $existingLog = $db->single(
+        "SELECT * FROM attendance_logs 
+         WHERE verification_id = ? AND DATE(time_in) = CURRENT_DATE",
+        [$verificationData['id']]
+    );
+
+    if ($existingLog) {
+        echo json_encode([
+            'status' => 'error',
+            'lcd_message' => LCD_MESSAGES['ALREADY_LOGGED'],
+            'buzzer_tone' => BUZZER_TONES['ERROR']
+        ]);
+        return;
+    }
+
+    $lateTime = $db->single(
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'late_time'"
+    )['setting_value'] ?? '09:00:00';
+
+    $status = strtotime(date('H:i:s')) <= strtotime($lateTime) ? 'on_time' : 'late';
+    
+    $db->insert('attendance_logs', [
+        'verification_id' => $verificationData['id'],
+        'user_id' => $verificationData['user_id'],
+        'time_in' => date('Y-m-d H:i:s'),
+        'verification_type' => $verificationData['user_type'] === 'special' ? 'rfid_only' : 'dual',
+        'status' => $status,
+        'device_id' => $deviceId
+    ]);
+
+    $_SESSION['verification'] = [
+        'timestamp' => time(),
+        'rfid_verified' => false,
+        'user_id' => null
+    ];
+
+    echo json_encode([
+        'status' => 'success',
+        'lcd_message' => $status === 'late' ? LCD_MESSAGES['LATE'] : LCD_MESSAGES['ON_TIME'],
+        'buzzer_tone' => BUZZER_TONES['SUCCESS']
     ]);
 }
