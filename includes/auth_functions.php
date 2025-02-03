@@ -2,28 +2,28 @@
 require_once dirname(__DIR__) . '/config/constants.php';
 require_once 'functions.php';
 
-// Start session if not already started
 function ensureSession() {
     if (session_status() === PHP_SESSION_NONE) {
         session_start();
     }
 }
 
-function loginUser($username, $password) {
+function loginUser($id_number, $password) {
     ensureSession();
     $db = getDatabase();
     
     try {
         $user = $db->single(
-            "SELECT * FROM users WHERE username = ?", 
-            [$username]
+            "SELECT * FROM users WHERE id_number = ?", 
+            [$id_number]
         );
 
         if ($user && password_verify($password, $user['password'])) {
             $_SESSION['user_id'] = $user['id'];
-            $_SESSION['username'] = $user['username'];
+            $_SESSION['id_number'] = $user['id_number'];
             $_SESSION['role'] = $user['role'];
             $_SESSION['name'] = $user['name'];
+            $_SESSION['user_type'] = $user['user_type'];
             return true;
         }
         return false;
@@ -37,7 +37,6 @@ function logoutUser() {
     ensureSession();
     $_SESSION = array();
     session_destroy();
-    
     if (isset($_COOKIE[session_name()])) {
         setcookie(session_name(), '', time()-3600, '/');
     }
@@ -55,12 +54,8 @@ function isAdmin() {
 
 function requireLogin() {
     ensureSession();
-    
     if (!isLoggedIn()) {
-        // Save the requested URL for redirect after login
         $_SESSION['redirect_after_login'] = $_SERVER['REQUEST_URI'];
-        
-        // Redirect to login
         header('Location: ' . AUTH_URL . '/login.php');
         exit();
     }
@@ -68,15 +63,11 @@ function requireLogin() {
 
 function requireAdmin() {
     ensureSession();
-
-    // First check if logged in
     if (!isLoggedIn()) {
         $_SESSION['redirect_after_login'] = $_SERVER['REQUEST_URI'];
         header('Location: ' . AUTH_URL . '/login.php');
         exit();
     }
-
-    // Then check if admin
     if (!isAdmin()) {
         header('Location: ' . USER_URL);
         exit();
@@ -85,12 +76,31 @@ function requireAdmin() {
 
 function redirectAfterLogin() {
     ensureSession();
-    
     if (isset($_SESSION['redirect_after_login'])) {
         $redirect = $_SESSION['redirect_after_login'];
         unset($_SESSION['redirect_after_login']);
         return $redirect;
     }
-    
     return isAdmin() ? ADMIN_URL : USER_URL;
+}
+
+function checkAuthStatus() {
+    $response = [
+        'isAuthenticated' => false,
+        'isAdmin' => false,
+        'user' => null
+    ];
+
+    if (isLoggedIn()) {
+        $response['isAuthenticated'] = true;
+        $response['isAdmin'] = isAdmin();
+        $response['user'] = [
+            'id' => $_SESSION['user_id'],
+            'id_number' => $_SESSION['id_number'],
+            'name' => $_SESSION['name'],
+            'role' => $_SESSION['role'],
+            'user_type' => $_SESSION['user_type']
+        ];
+    }
+    return $response;
 }

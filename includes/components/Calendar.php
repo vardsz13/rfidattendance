@@ -64,28 +64,26 @@ class Calendar {
 
         // Get attendance records for each day
         $query = "SELECT 
-                    DATE(log_time) as date,
-                    COUNT(DISTINCT CASE WHEN log_type = 'in' THEN user_id END) as total_present,
-                    COUNT(DISTINCT CASE 
-                        WHEN log_type = 'in' AND status = 'on_time' 
-                        THEN user_id 
-                    END) as on_time,
-                    COUNT(DISTINCT CASE 
-                        WHEN log_type = 'in' AND status = 'late' 
-                        THEN user_id 
-                    END) as late,
+                    DATE(time_in) as date,
+                    COUNT(DISTINCT user_id) as total_present,
+                    COUNT(DISTINCT CASE WHEN status = 'on_time' THEN user_id END) as on_time,
+                    COUNT(DISTINCT CASE WHEN status = 'late' THEN user_id END) as late,
+                    COUNT(DISTINCT CASE WHEN override_status = 'excused' THEN user_id END) as excused,
+                    COUNT(DISTINCT CASE WHEN override_status = 'half_day' THEN user_id END) as half_day,
+                    COUNT(DISTINCT CASE WHEN override_status = 'vacation' THEN user_id END) as vacation,
+                    COUNT(DISTINCT CASE WHEN status = 'absent' THEN user_id END) as absent,
                     COUNT(DISTINCT user_id) as total_attendance
                  FROM attendance_logs al
-                 JOIN rfid_assignments ra ON al.assignment_id = ra.id";
+                 JOIN user_verification_data uvd ON al.verification_id = uvd.id";
 
         $params = [];
         if ($this->isAuth && !$this->isAdmin) {
-            $query .= " WHERE ra.user_id = ?";
+            $query .= " WHERE uvd.user_id = ?";
             $params[] = $this->userId;
         }
 
-        $query .= " AND DATE(log_time) BETWEEN ? AND ?
-                   GROUP BY DATE(log_time)";
+        $query .= " AND DATE(time_in) BETWEEN ? AND ?
+                   GROUP BY DATE(time_in)";
         
         array_push($params, $startDate, $endDate);
         
@@ -116,6 +114,10 @@ class Calendar {
                     'total_present' => 0,
                     'on_time' => 0,
                     'late' => 0,
+                    'excused' => 0,
+                    'half_day' => 0,
+                    'vacation' => 0,
+                    'absent' => $totalUsers,
                     'total_attendance' => 0,
                     'total_active_users' => $totalUsers
                 ];
@@ -125,18 +127,6 @@ class Calendar {
         }
         
         return ['map' => $attendanceMap, 'total_users' => $totalUsers];
-    }
-
-    private function getDaysInMonth() {
-        return date('t', strtotime("{$this->year}-{$this->month}-01"));
-    }
-
-    private function getFirstDayOfMonth() {
-        return date('w', strtotime("{$this->year}-{$this->month}-01"));
-    }
-
-    private function getMonthName() {
-        return date('F Y', strtotime("{$this->year}-{$this->month}-01"));
     }
 
     public function getStatsCards() {
@@ -151,6 +141,10 @@ class Calendar {
                 'total_present' => 0,
                 'on_time' => 0,
                 'late' => 0,
+                'excused' => 0,
+                'half_day' => 0,
+                'vacation' => 0,
+                'absent' => $attendanceData['total_users'],
                 'total_active_users' => $attendanceData['total_users']
             ];
         }
@@ -158,85 +152,109 @@ class Calendar {
         $html = '<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">';
 
         // Total Users Card
-        $html .= '
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-700">Total Users</h3>
-                <div class="mt-2">
-                    <p class="text-3xl font-bold text-blue-600">
-                        ' . number_format($todayData['total_active_users']) . '
-                    </p>
-                    <p class="text-sm text-gray-600">Registered Employees</p>
-                </div>
-            </div>';
+        $html .= $this->generateStatsCard(
+            'Total Users',
+            $todayData['total_active_users'],
+            'Registered Employees',
+            'blue'
+        );
 
         // Present Today Card
-        $html .= '
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-700">Present Today</h3>
-                <div class="mt-2">
-                    <p class="text-3xl font-bold text-green-600">
-                        ' . number_format($todayData['total_present']) . '
-                    </p>
-                    <p class="text-sm text-gray-600">Checked In Today</p>
-                </div>
-            </div>';
+        $html .= $this->generateStatsCard(
+            'Present Today',
+            $todayData['total_present'],
+            'Checked In Today',
+            'green'
+        );
 
         // On Time Card
-        $html .= '
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-700">On Time Today</h3>
-                <div class="mt-2">
-                    <p class="text-3xl font-bold text-emerald-600">
-                        ' . number_format($todayData['on_time']) . '
-                    </p>
-                    <p class="text-sm text-gray-600">Arrived On Time</p>
-                </div>
-            </div>';
+        $html .= $this->generateStatsCard(
+            'On Time Today',
+            $todayData['on_time'],
+            'Arrived On Time',
+            'emerald'
+        );
 
-        // Late Card
-        $html .= '
-            <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-700">Late Today</h3>
-                <div class="mt-2">
-                    <p class="text-3xl font-bold text-red-600">
-                        ' . number_format($todayData['late']) . '
-                    </p>
-                    <p class="text-sm text-gray-600">Arrived Late</p>
-                </div>
-            </div>';
+        // Absent Card
+        $html .= $this->generateStatsCard(
+            'Absent Today',
+            $todayData['absent'],
+            'Not Present Today',
+            'red'
+        );
+
+        $html .= '</div>';
+
+        // Additional Status Cards
+        $html .= '<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">';
+        
+        // Excused Card
+        $html .= $this->generateStatsCard(
+            'Excused',
+            $todayData['excused'],
+            'Excused Absences',
+            'purple'
+        );
+
+        // Half Day Card
+        $html .= $this->generateStatsCard(
+            'Half Day',
+            $todayData['half_day'],
+            'Half Day Leaves',
+            'yellow'
+        );
+
+        // Vacation Card
+        $html .= $this->generateStatsCard(
+            'Vacation',
+            $todayData['vacation'],
+            'On Vacation',
+            'indigo'
+        );
 
         $html .= '</div>';
 
         return $html;
     }
 
+    private function generateStatsCard($title, $value, $subtitle, $color) {
+        return "
+            <div class='bg-white rounded-lg shadow p-6'>
+                <h3 class='text-lg font-semibold text-gray-700'>$title</h3>
+                <div class='mt-2'>
+                    <p class='text-3xl font-bold text-{$color}-600'>
+                        " . number_format($value) . "
+                    </p>
+                    <p class='text-sm text-gray-600'>$subtitle</p>
+                </div>
+            </div>";
+    }
+
     public function render() {
         $holidays = $this->getHolidays();
         $attendanceData = $this->getAttendanceData();
         $attendance = $attendanceData['map'];
-        $daysInMonth = $this->getDaysInMonth();
-        $firstDay = $this->getFirstDayOfMonth();
-        $monthName = $this->getMonthName();
+        $daysInMonth = date('t', strtotime("{$this->year}-{$this->month}-01"));
+        $firstDay = date('w', strtotime("{$this->year}-{$this->month}-01"));
+        $monthName = date('F Y', strtotime("{$this->year}-{$this->month}-01"));
 
         $html = '<div class="bg-white rounded-lg shadow p-6">';
         
         // Calendar Header
-        $html .= <<<HTML
-        <div class="flex justify-between items-center mb-4">
-            <h2 class="text-xl font-bold">$monthName</h2>
-            <div class="space-x-2">
-                <button onclick="changeMonth(-1)" class="px-3 py-1 border rounded hover:bg-gray-100">←</button>
-                <button onclick="changeMonth(1)" class="px-3 py-1 border rounded hover:bg-gray-100">→</button>
+        $html .= "
+        <div class='flex justify-between items-center mb-4'>
+            <h2 class='text-xl font-bold'>$monthName</h2>
+            <div class='space-x-2'>
+                <button onclick='changeMonth(-1)' class='px-3 py-1 border rounded hover:bg-gray-100'>←</button>
+                <button onclick='changeMonth(1)' class='px-3 py-1 border rounded hover:bg-gray-100'>→</button>
             </div>
-        </div>
-        HTML;
+        </div>";
 
         // Calendar Grid
         $html .= '<div class="grid grid-cols-7 gap-px">';
 
         // Weekday headers
-        $weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-        foreach ($weekDays as $day) {
+        foreach (['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as $day) {
             $html .= "<div class='font-semibold text-center py-2'>$day</div>";
         }
 
@@ -250,8 +268,7 @@ class Calendar {
         for ($day = 1; $day <= $daysInMonth; $day++) {
             $date = sprintf('%s-%02d-%02d', $this->year, $this->month, $day);
             $isHoliday = isset($holidays[$date]);
-            $hasAttendance = isset($attendance[$date]) && 
-                            ($attendance[$date]['total_present'] > 0);
+            $attendance_record = $attendance[$date] ?? null;
             $isToday = $date === $today;
             $isFutureDate = $date > $today;
             $isBeforeCreation = $this->userCreatedAt && $date < $this->userCreatedAt;
@@ -273,15 +290,29 @@ class Calendar {
             $dayClass = $isToday ? 'font-semibold text-blue-600' : 'font-semibold';
             $html .= "<div class='$dayClass'>$day</div>";
 
-            // Show only holiday name or attendance indicator
+            // Show attendance status
+            if (!$isFutureDate && !$isBeforeCreation && $attendance_record) {
+                $statusDot = '';
+                if ($attendance_record['total_present'] > 0) {
+                    $statusDot = 'text-green-600';
+                } elseif ($attendance_record['excused'] > 0) {
+                    $statusDot = 'text-blue-600';
+                } elseif ($attendance_record['vacation'] > 0) {
+                    $statusDot = 'text-purple-600';
+                } elseif ($attendance_record['half_day'] > 0) {
+                    $statusDot = 'text-yellow-600';
+                } else {
+                    $statusDot = 'text-red-600';
+                }
+                $html .= "<div class='mt-1 text-xs {$statusDot}'>•</div>";
+            }
+
+            // Show holiday name if applicable
             if ($isHoliday) {
                 $html .= sprintf(
                     '<div class="text-xs text-blue-600 mt-1">%s</div>', 
                     htmlspecialchars($holidays[$date]['title'])
                 );
-            } elseif (!$isFutureDate && !$isBeforeCreation) {
-                $statusDot = $hasAttendance ? 'text-green-600' : 'text-red-600';
-                $html .= "<div class='mt-1 text-xs {$statusDot}'>•</div>";
             }
 
             $html .= '</div>';
@@ -289,7 +320,7 @@ class Calendar {
 
         $html .= '</div>'; // End grid
 
-        // Modal template
+        // Modal template for day details
         $html .= $this->getModalTemplate();
 
         $html .= '</div>'; // End calendar container
