@@ -124,7 +124,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function initializeRealTimeUpdates() {
         if (typeof EventSource !== 'undefined') {
-            const eventSource = new EventSource('<?= BASE_URL ?>/device_events.php');
+            const eventSource = new EventSource('<?= BASE_URL ?>/ajax/device_events.php');
 
             eventSource.onmessage = function(event) {
                 const data = JSON.parse(event.data);

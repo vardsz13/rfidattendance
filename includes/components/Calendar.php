@@ -1,11 +1,11 @@
 <?php
+// includes/components/Calendar.php
 class Calendar {
     private $db;
     private $year;
     private $month;
     private $isAdmin;
     private $userId;
-    private $isAuth;
 
     public function __construct($db, $year = null, $month = null, $isAdmin = false, $userId = null) {
         $this->db = $db;
@@ -13,121 +13,227 @@ class Calendar {
         $this->month = $month ?? date('m');
         $this->isAdmin = $isAdmin;
         $this->userId = $userId;
-        $this->isAuth = !is_null($userId);
+    }
+
+    public function render() {
+        $attendanceData = $this->getAttendanceData();
+        $daysInMonth = date('t', strtotime("{$this->year}-{$this->month}-01"));
+        $firstDay = date('w', strtotime("{$this->year}-{$this->month}-01"));
+        $monthName = date('F Y', strtotime("{$this->year}-{$this->month}-01"));
+        $today = date('Y-m-d');
+    
+        $html = '<div class="bg-white rounded-lg shadow p-6">';
+        
+        // Month navigation
+        $html .= "
+        <div class='flex justify-between items-center mb-4'>
+            <h2 class='text-xl font-bold'>$monthName</h2>
+            <div class='space-x-2'>
+                <button onclick='changeMonth(-1)' class='px-3 py-1 border rounded hover:bg-gray-100'>←</button>
+                <button onclick='changeMonth(1)' class='px-3 py-1 border rounded hover:bg-gray-100'>→</button>
+            </div>
+        </div>";
+    
+        // Calendar grid
+        $html .= '<div class="grid grid-cols-7 gap-px bg-gray-200">';
+    
+        // Days of week
+        foreach (['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as $day) {
+            $html .= "<div class='bg-gray-50 font-semibold text-center py-2'>$day</div>";
+        }
+    
+        // Blank cells before start of month
+        for ($i = 0; $i < $firstDay; $i++) {
+            $html .= '<div class="bg-white h-24"></div>';
+        }
+    
+        // Calendar days
+        for ($day = 1; $day <= $daysInMonth; $day++) {
+            $date = sprintf('%s-%02d-%02d', $this->year, $this->month, $day);
+            $isToday = $date === $today;
+            $isFutureDate = strtotime($date) > strtotime($today);
+            
+            // Base cell classes
+            $cellClasses = [
+                'bg-white',
+                'h-24',
+                'p-2',
+                'relative',
+                'cursor-pointer'
+            ];
+            
+            if ($isToday) {
+                $cellClasses[] = 'ring-2';
+                $cellClasses[] = 'ring-blue-500';
+                $cellClasses[] = 'ring-inset';
+            }
+            
+            if ($isFutureDate) {
+                $cellClasses[] = 'bg-gray-50';
+                $cellClasses[] = 'opacity-50';
+            } else {
+                $cellClasses[] = 'hover:bg-gray-50';
+            }
+    
+            $html .= sprintf(
+                '<div class="%s" onclick="showDayDetails(\'%s\')">',
+                implode(' ', $cellClasses),
+                $date
+            );
+    
+            // Day number
+            $dayClasses = $isToday ? 'font-semibold text-blue-600' : 'font-semibold';
+            $html .= "<div class='$dayClasses'>$day</div>";
+    
+            // Attendance indicators (only for non-future dates)
+            if (!$isFutureDate && isset($attendanceData[$date])) {
+                $html .= $this->getStatusIndicators($attendanceData[$date]);
+            }
+    
+            $html .= '</div>';
+        }
+    
+        // Fill in remaining cells
+        $lastDay = ($firstDay + $daysInMonth) % 7;
+        if ($lastDay > 0) {
+            for ($i = 0; $i < (7 - $lastDay); $i++) {
+                $html .= '<div class="bg-white h-24"></div>';
+            }
+        }
+    
+        $html .= '</div>';
+        $html .= $this->getModalTemplate();
+        $html .= '</div>';
+    
+        return $html;
     }
 
     private function getAttendanceData() {
         $startDate = "{$this->year}-{$this->month}-01";
         $endDate = date('Y-m-t', strtotime($startDate));
 
-        $totalStudentsQuery = "SELECT COUNT(*) as count FROM users WHERE role = 'student'";
-        if ($this->isAuth && !$this->isAdmin) {
-            $totalStudentsQuery .= " AND id = ?";
-            $totalStudents = $this->db->single($totalStudentsQuery, [$this->userId])['count'];
-        } else {
-            $totalStudents = $this->db->single($totalStudentsQuery)['count'];
+        $query = "
+            SELECT 
+                DATE(al.time_in) as date,
+                COUNT(DISTINCT CASE WHEN al.status = 'on_time' THEN al.user_id END) as on_time,
+                COUNT(DISTINCT CASE WHEN al.status = 'late' THEN al.user_id END) as late,
+                COUNT(DISTINCT CASE WHEN al.override_status = 'excused' THEN al.user_id END) as excused,
+                COUNT(DISTINCT CASE WHEN al.override_status = 'event' THEN al.user_id END) as event,
+                COUNT(DISTINCT CASE WHEN al.override_status = 'medical' THEN al.user_id END) as medical
+            FROM attendance_logs al
+            WHERE DATE(al.time_in) BETWEEN ? AND ?";
+
+        if (!$this->isAdmin) {
+            $query .= " AND al.user_id = ?";
         }
 
-        $query = "SELECT 
-                    DATE(time_in) as date,
-                    COUNT(DISTINCT user_id) as total_present,
-                    COUNT(DISTINCT CASE WHEN status = 'on_time' THEN user_id END) as on_time,
-                    COUNT(DISTINCT CASE WHEN status = 'late' THEN user_id END) as late,
-                    COUNT(DISTINCT CASE WHEN override_status = 'excused' THEN user_id END) as excused,
-                    COUNT(DISTINCT CASE WHEN override_status = 'event' THEN user_id END) as event,
-                    COUNT(DISTINCT CASE WHEN override_status = 'medical' THEN user_id END) as medical,
-                    COUNT(DISTINCT CASE WHEN status = 'absent' THEN user_id END) as absent
-                FROM attendance_logs al
-                JOIN user_verification_data uvd ON al.verification_id = uvd.id";
-
-        $params = [];
-        if ($this->isAuth && !$this->isAdmin) {
-            $query .= " WHERE uvd.user_id = ?";
+        $query .= " GROUP BY DATE(al.time_in)";
+        
+        $params = [$startDate, $endDate];
+        if (!$this->isAdmin) {
             $params[] = $this->userId;
         }
 
-        $query .= " AND DATE(time_in) BETWEEN ? AND ?
-                   GROUP BY DATE(time_in)";
-        
-        array_push($params, $startDate, $endDate);
-        
         $attendance = $this->db->all($query, $params);
         
-        $attendanceMap = [];
-        $currentDate = strtotime($startDate);
-        $endTimestamp = strtotime($endDate);
-        
-        while ($currentDate <= $endTimestamp) {
-            $dateStr = date('Y-m-d', $currentDate);
-            $found = false;
-            
-            foreach ($attendance as $record) {
-                if ($record['date'] === $dateStr) {
-                    $attendanceMap[$dateStr] = array_merge($record, [
-                        'total_students' => $totalStudents
-                    ]);
-                    $found = true;
-                    break;
-                }
-            }
-            
-            if (!$found && $dateStr <= date('Y-m-d')) {
-                $attendanceMap[$dateStr] = [
-                    'date' => $dateStr,
-                    'total_present' => 0,
-                    'on_time' => 0,
-                    'late' => 0,
-                    'excused' => 0,
-                    'event' => 0,
-                    'medical' => 0,
-                    'absent' => $totalStudents,
-                    'total_students' => $totalStudents
-                ];
-            }
-            
-            $currentDate = strtotime('+1 day', $currentDate);
+        $data = [];
+        foreach ($attendance as $record) {
+            $data[$record['date']] = $record;
         }
         
-        return ['map' => $attendanceMap, 'total_students' => $totalStudents];
+        return $data;
+    }
+
+    private function getStatusIndicators($attendance) {
+        $indicators = '';
+        
+        if ($attendance['medical'] > 0) {
+            $indicators .= '<div class="text-pink-600">• Medical Leave</div>';
+        }
+        if ($attendance['event'] > 0) {
+            $indicators .= '<div class="text-indigo-600">• Event</div>';
+        }
+        if ($attendance['excused'] > 0) {
+            $indicators .= '<div class="text-purple-600">• Excused</div>';
+        }
+        if ($attendance['on_time'] > 0) {
+            $indicators .= '<div class="text-green-600">• On Time</div>';
+        }
+        if ($attendance['late'] > 0) {
+            $indicators .= '<div class="text-yellow-600">• Late</div>';
+        }
+
+        return $indicators;
+    }
+
+    private function getModalTemplate() {
+        return '
+        <div id="dayDetailsModal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+            <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+                <div class="mt-3">
+                    <h3 id="modalDate" class="text-lg font-medium leading-6 text-gray-900 mb-4"></h3>
+                    <div id="modalContent" class="space-y-4"></div>
+                    <div class="mt-4">
+                        <button onclick="closeModal()" 
+                                class="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                            Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>';
     }
 
     public function getStatsCards() {
         if (!$this->isAdmin) return '';
 
         $today = date('Y-m-d');
-        $attendanceData = $this->getAttendanceData();
-        $todayData = $attendanceData['map'][$today] ?? null;
-
-        if (!$todayData) {
-            $todayData = [
-                'total_present' => 0,
-                'on_time' => 0,
-                'late' => 0,
-                'excused' => 0,
-                'event' => 0,
-                'medical' => 0,
-                'absent' => $attendanceData['total_students'],
-                'total_students' => $attendanceData['total_students']
-            ];
-        }
+        $stats = $this->db->single("
+            SELECT 
+                COUNT(DISTINCT user_id) as total_users,
+                COUNT(DISTINCT CASE WHEN status = 'on_time' THEN user_id END) as on_time,
+                COUNT(DISTINCT CASE WHEN status = 'late' THEN user_id END) as late,
+                COUNT(DISTINCT CASE WHEN override_status IS NOT NULL THEN user_id END) as excused
+            FROM attendance_logs 
+            WHERE DATE(time_in) = ?", 
+            [$today]
+        );
 
         $html = '<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">';
         
-        // Main Stats
-        $html .= $this->generateStatsCard('Total Students', $todayData['total_students'], 'Registered Students', 'blue');
-        $html .= $this->generateStatsCard('Present Today', $todayData['total_present'], 'In Attendance', 'green');
-        $html .= $this->generateStatsCard('Late Today', $todayData['late'], 'Arrived Late', 'yellow');
-        $html .= $this->generateStatsCard('Absent Today', $todayData['absent'], 'Not Present', 'red');
+        // Total Users
+        $html .= $this->generateStatsCard(
+            'Total Users', 
+            $stats['total_users'], 
+            'Registered Students', 
+            'blue'
+        );
+        
+        // On Time
+        $html .= $this->generateStatsCard(
+            'On Time', 
+            $stats['on_time'], 
+            'Arrived on Time', 
+            'green'
+        );
+        
+        // Late
+        $html .= $this->generateStatsCard(
+            'Late', 
+            $stats['late'], 
+            'Arrived Late', 
+            'yellow'
+        );
+        
+        // Excused
+        $html .= $this->generateStatsCard(
+            'Excused', 
+            $stats['excused'], 
+            'Excused Absences', 
+            'purple'
+        );
 
         $html .= '</div>';
-
-        // Override Stats
-        $html .= '<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">';
-        $html .= $this->generateStatsCard('Excused', $todayData['excused'], 'Excused Absences', 'purple');
-        $html .= $this->generateStatsCard('Events', $todayData['event'], 'School Events', 'indigo');
-        $html .= $this->generateStatsCard('Medical', $todayData['medical'], 'Medical Leave', 'pink');
-        $html .= '</div>';
-
         return $html;
     }
 
@@ -142,92 +248,5 @@ class Calendar {
                     <p class='text-sm text-gray-600'>$subtitle</p>
                 </div>
             </div>";
-    }
-
-    public function render() {
-        $attendanceData = $this->getAttendanceData();
-        $attendance = $attendanceData['map'];
-        $daysInMonth = date('t', strtotime("{$this->year}-{$this->month}-01"));
-        $firstDay = date('w', strtotime("{$this->year}-{$this->month}-01"));
-        $monthName = date('F Y', strtotime("{$this->year}-{$this->month}-01"));
-
-        $html = '<div class="bg-white rounded-lg shadow p-6">';
-        
-        $html .= "
-        <div class='flex justify-between items-center mb-4'>
-            <h2 class='text-xl font-bold'>$monthName</h2>
-            <div class='space-x-2'>
-                <button onclick='changeMonth(-1)' class='px-3 py-1 border rounded hover:bg-gray-100'>←</button>
-                <button onclick='changeMonth(1)' class='px-3 py-1 border rounded hover:bg-gray-100'>→</button>
-            </div>
-        </div>";
-
-        $html .= '<div class="grid grid-cols-7 gap-px">';
-
-        foreach (['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as $day) {
-            $html .= "<div class='font-semibold text-center py-2'>$day</div>";
-        }
-
-        for ($i = 0; $i < $firstDay; $i++) {
-            $html .= '<div class="h-24 border border-gray-200"></div>';
-        }
-
-        $today = date('Y-m-d');
-        for ($day = 1; $day <= $daysInMonth; $day++) {
-            $date = sprintf('%s-%02d-%02d', $this->year, $this->month, $day);
-            $attendance_record = $attendance[$date] ?? null;
-            $isToday = $date === $today;
-            $isFutureDate = $date > $today;
-
-            $cellClass = 'h-24 border border-gray-200 p-2 cursor-pointer hover:bg-gray-50 relative';
-            if ($isToday) {
-                $cellClass .= ' ring-2 ring-blue-500 ring-inset';
-            }
-
-            $html .= "<div class='$cellClass' onclick='showDayDetails(\"$date\")'>";
-            
-            $dayClass = $isToday ? 'font-semibold text-blue-600' : 'font-semibold';
-            $html .= "<div class='$dayClass'>$day</div>";
-
-            if (!$isFutureDate && $attendance_record) {
-                $statusDot = $this->getStatusDot($attendance_record);
-                $html .= "<div class='mt-1 text-xs {$statusDot}'>•</div>";
-            }
-
-            $html .= '</div>';
-        }
-
-        $html .= '</div>';
-        $html .= $this->getModalTemplate();
-        $html .= '</div>';
-
-        return $html;
-    }
-
-    private function getStatusDot($record) {
-        if ($record['medical'] > 0) return 'text-pink-600';
-        if ($record['event'] > 0) return 'text-indigo-600';
-        if ($record['excused'] > 0) return 'text-purple-600';
-        if ($record['total_present'] > 0) return 'text-green-600';
-        return 'text-red-600';
-    }
-
-    private function getModalTemplate() {
-        return <<<HTML
-        <div id="dayDetailsModal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-            <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
-                <div class="mt-3">
-                    <h3 id="modalDate" class="text-lg font-medium leading-6 text-gray-900 mb-4"></h3>
-                    <div id="modalContent" class="space-y-4"></div>
-                    <div class="mt-4">
-                        <button onclick="closeModal()" 
-                                class="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
-                            Close
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-        HTML;
     }
 }
