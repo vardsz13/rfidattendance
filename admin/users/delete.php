@@ -3,30 +3,27 @@ require_once dirname(__DIR__, 2) . '/config/constants.php';
 require_once dirname(__DIR__, 2) . '/includes/auth_functions.php';
 require_once dirname(__DIR__, 2) . '/includes/functions.php';
 
-session_start();
-
-// Check login and admin status
-if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
-    header('Location: ' . AUTH_URL . '/login.php');
-    exit();
+// Start session if not already started
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$db = getDatabase();
+// Ensure admin access
+requireAdmin();
 
-// Get user ID from URL
-$userId = $_GET['id'] ?? null;
+$db = getDatabase();
+$userId = isset($_GET['id']) ? (int)$_GET['id'] : null;
 
 // Basic validation
-if (!$userId || $userId == $_SESSION['user_id']) {
-    flashMessage('Invalid user deletion request', 'error');
+if (!$userId) {
+    flashMessage('Invalid user ID provided', 'error');
     header('Location: index.php');
     exit();
 }
 
-// Get user data
-$user = $db->single("SELECT * FROM users WHERE id = ?", [$userId]);
-if (!$user) {
-    flashMessage('User not found', 'error');
+// Prevent deleting own account
+if ($userId == $_SESSION['user_id']) {
+    flashMessage('Cannot delete your own account', 'error');
     header('Location: index.php');
     exit();
 }
@@ -35,25 +32,43 @@ try {
     // Begin transaction
     $db->connect()->beginTransaction();
 
-    // First delete related records in verification_data
-    $db->query("DELETE FROM verification_data WHERE user_id = ?", [$userId]);
+    // First delete attendance logs
+    $db->query(
+        "DELETE FROM attendance_logs WHERE user_id = ?", 
+        [$userId]
+    );
 
-    // Then delete attendance records
-    $db->query("DELETE FROM attendance WHERE user_id = ?", [$userId]);
+    // Delete verification data
+    $db->query(
+        "DELETE FROM user_verification_data WHERE user_id = ?", 
+        [$userId]
+    );
 
     // Finally delete the user
-    $db->query("DELETE FROM users WHERE id = ?", [$userId]);
+    $result = $db->query(
+        "DELETE FROM users WHERE id = ? AND role != 'admin'", 
+        [$userId]
+    );
+
+    if ($result === false) {
+        throw new Exception('Failed to delete user');
+    }
 
     // Commit transaction
     $db->connect()->commit();
 
-    flashMessage('User and related data deleted successfully');
+    flashMessage('User successfully deleted');
+
 } catch (Exception $e) {
     // Rollback on error
-    $db->connect()->rollBack();
-    error_log("Error deleting user: " . $e->getMessage());
-    flashMessage('Error deleting user', 'error');
+    if ($db->connect()->inTransaction()) {
+        $db->connect()->rollBack();
+    }
+    
+    error_log("Error deleting user (ID: $userId): " . $e->getMessage());
+    flashMessage('Error deleting user: ' . $e->getMessage(), 'error');
 }
 
+// Redirect back to user list
 header('Location: index.php');
 exit();

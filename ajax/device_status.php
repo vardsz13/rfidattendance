@@ -8,6 +8,11 @@ header('Content-Type: application/json');
 $db = getDatabase();
 
 try {
+    // Get current device mode
+    $mode = $db->single(
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'device_mode'"
+    )['setting_value'] ?? 'scan';
+
     // Get latest attendance log
     $attendance = $db->single(
         "SELECT al.*, u.name, u.user_type
@@ -28,11 +33,13 @@ try {
          LIMIT 1"
     );
 
-    $response = [];
+    $response = [
+        'mode' => $mode
+    ];
 
     if ($attendance && strtotime($attendance['created_at']) > time() - 5) {
         // Recent attendance
-        $response = [
+        $response += [
             'verification_status' => 'success',
             'verification_message' => 'Verification successful',
             'user_name' => $attendance['name'],
@@ -50,7 +57,7 @@ try {
         }
     } elseif ($deviceLog && strtotime($deviceLog['verification_time']) > time() - 5) {
         // Recent device activity
-        $response = [
+        $response += [
             'rfid_status' => $deviceLog['status'],
             'rfid_message' => $deviceLog['lcd_display'],
             'buzzer_tone' => $deviceLog['buzzer_tone'],
@@ -63,9 +70,9 @@ try {
         }
     } else {
         // No recent activity
-        $response = [
+        $response += [
             'status' => 'ready',
-            'lcd_message' => LCD_MESSAGES['READY'],
+            'lcd_message' => $mode === 'register' ? LCD_MESSAGES['READY_REGISTER'] : LCD_MESSAGES['READY'],
             'buzzer_tone' => null
         ];
     }
