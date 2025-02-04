@@ -20,7 +20,7 @@ define('USER_URL', BASE_URL . '/user');
 define('AUTH_URL', BASE_URL . '/auth');
 define('ASSETS_URL', BASE_URL . '/assets');
 
-// Database Constants
+// Database Constants  
 define('DB_HOST', 'localhost');
 define('DB_NAME', 'rfidattendance');
 define('DB_USER', 'root');
@@ -34,26 +34,31 @@ session_set_cookie_params(SESSION_LIFETIME);
 
 // Device Constants
 define('VERIFICATION_TIMEOUT', 30);
-define('DISPLAY_TIMEOUT', 20); // 20 seconds for attendance display
-define('RFID_TIMEOUT', 5); // 5 seconds between RFID scans
+define('DISPLAY_TIMEOUT', 20); 
+define('RFID_TIMEOUT', 5);
 
 // LCD Messages
-define('LCD_MESSAGES', [
-    'READY' => 'Please scan your ID',
-    'RFID_SUCCESS' => 'RFID Verified',
-    'RFID_FAILED' => 'Invalid RFID',
-    'RFID_REGISTERED' => 'RFID Registered',
-    'RFID_EXISTS' => 'RFID Already Exists',
-    'ON_TIME' => 'Welcome! On Time',
-    'LATE' => 'You are Late',
-    'TIME_OUT' => 'Goodbye! Time Out',
-    'ERROR' => 'System Error'
-]);
+define('LCD_MESSAGES', array(
+   'READY' => 'Please scan your ID',
+   'RFID_SUCCESS' => 'RFID Verified', 
+   'RFID_FAILED' => 'Invalid RFID',
+   'RFID_REGISTERED' => 'RFID Registered',
+   'RFID_EXISTS' => 'RFID Already Exists',
+   'FINGER_REQUIRED' => 'Place finger',
+   'FINGER_SUCCESS' => 'Verified',
+   'FINGER_FAILED' => 'Invalid finger', 
+   'FINGER_EXISTS' => 'Already exists',
+   'FINGER_REGISTERED' => 'Registered',
+   'ON_TIME' => 'Welcome! On Time',
+   'LATE' => 'You are Late',
+   'TIME_OUT' => 'Goodbye! Time Out', 
+   'ERROR' => 'System Error'
+));
 
 // Buzzer Tones
-define('BUZZER_TONES', [
-    'SUCCESS' => 'success_tone', // Short double beep
-    'ERROR' => 'error_tone',     // Long single beep
-    'LATE' => 'late_tone',       // Triple beep
-    'WAIT' => 'wait_tone'        // Short single beep
-]);
+define('BUZZER_TONES', array(
+   'SUCCESS' => 'success_tone',
+   'ERROR' => 'error_tone',  
+   'LATE' => 'late_tone',
+   'WAIT' => 'wait_tone'
+));
